@@ -1,0 +1,31 @@
+# Node
+node_modules/
+.pnpm-store/
+.next/
+out/
+dist/
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Foundry
+contracts/solidity/lib/
+contracts/solidity/cache/
+contracts/solidity/out/
+contracts/solidity/broadcast/*/31337/
+contracts/solidity/broadcast/**/dry-run/
+
+# Rust / Stylus
+target/
+contracts/stylus-fiado-scoring/target/
+.private-key*
+
+# Misc
+.DS_Store
+*.log
+
+# Claude Code local state
+.claude/

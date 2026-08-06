@@ -1,0 +1,12 @@
+{
+  "name": "bodegueando",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter frontend dev",
+    "build": "pnpm --filter frontend build",
+    "contracts:build": "cd contracts/solidity && forge build",
+    "contracts:test": "cd contracts/solidity && forge test",
+    "stylus:check": "cd contracts/stylus-fiado-scoring && cargo stylus check",
+    "stylus:export-abi": "cd contracts/stylus-fiado-scoring && cargo stylus export-abi"
+  }
+}
