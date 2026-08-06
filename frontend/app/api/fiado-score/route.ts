@@ -41,7 +41,11 @@ const recommendationSchema = {
     },
     rationale: {
       type: "string",
-      description: "One or two sentences explaining the recommendation, referencing the payment history.",
+      description:
+        "One or two SHORT sentences in simple Peruvian Spanish (as if explaining to a bodega " +
+        "owner with no financial or technical background), referencing the payment history. " +
+        "No blockchain/technical jargon (never say 'on-chain', 'blockchain', 'wallet', 'smart " +
+        "contract', 'wei', etc.) — just plain talk about payments and confianza.",
     },
   },
   required: ["score", "creditLimitWei", "riskLevel", "rationale"],
@@ -108,7 +112,11 @@ export async function POST(request: NextRequest) {
       "on-chain payment history — amounts and timestamps of past payments received through the " +
       "platform — and recommend a credit score and a fiado credit limit in wei. Favor consistent, " +
       "frequent, recent payment activity; penalize sparse or old activity. Be conservative with " +
-      "credit limits when history is short.",
+      "credit limits when history is short. IMPORTANT: the `rationale` field is shown directly " +
+      "to end users who are not technical and may not be fluent in English — it must always be " +
+      "written in simple, everyday Peruvian Spanish, never in English, and never using " +
+      "blockchain/technical terms. `score` and `creditLimitWei` stay numeric as specified by the " +
+      "schema; only `rationale` is the plain-Spanish explanation.",
     messages: [
       {
         role: "user",

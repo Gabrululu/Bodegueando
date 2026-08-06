@@ -19,27 +19,37 @@ import { useAccount, useConnect, useDisconnect } from "wagmi";
  */
 export function PasskeyLogin() {
   const { address, isConnected } = useAccount();
-  const { connectors, connect, isPending } = useConnect();
+  const { connectors, connect, isPending, error } = useConnect();
   const { disconnect } = useDisconnect();
 
   if (isConnected && address) {
     return (
       <div className="flex items-center gap-2 text-sm">
-        <span>{address.slice(0, 6)}...{address.slice(-4)}</span>
-        <button onClick={() => disconnect()} className="underline">
-          Desconectar
+        <span className="text-zinc-500">
+          Cuenta: {address.slice(0, 6)}...{address.slice(-4)}
+        </span>
+        <button onClick={() => disconnect()} className="cursor-pointer underline">
+          Salir
         </button>
       </div>
     );
   }
 
   return (
-    <button
-      onClick={() => connect({ connector: connectors[0] })}
-      disabled={isPending}
-      className="rounded-md bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
-    >
-      {isPending ? "Conectando..." : "Conectar wallet (TODO: reemplazar por Passkey/AA)"}
-    </button>
+    <div className="flex flex-col items-center gap-1">
+      <button
+        onClick={() => connect({ connector: connectors[0] })}
+        disabled={isPending}
+        className="cursor-pointer rounded-md bg-black px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+      >
+        {isPending ? "Ingresando..." : "Ingresar"}
+      </button>
+      {error && (
+        <p className="max-w-xs text-center text-xs text-red-500">
+          No pudimos ingresar. Abre esta página desde una app de wallet o instala una extensión
+          compatible en tu navegador.
+        </p>
+      )}
+    </div>
   );
 }
