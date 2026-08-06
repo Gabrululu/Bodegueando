@@ -36,6 +36,16 @@ contract MockFiadoScoring is IFiadoScoring {
 
     function updateScoreFromAi(address, uint256, uint256) external override {}
 
+    mapping(address => bool) public fiadoEnabled;
+
+    function isFiadoEnabled(address bodega) external view override returns (bool) {
+        return fiadoEnabled[bodega];
+    }
+
+    function setFiadoEnabled(bool enabled) external override {
+        fiadoEnabled[msg.sender] = enabled;
+    }
+
     function paymentsLength() external view returns (uint256) {
         return payments.length;
     }

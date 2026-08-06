@@ -16,6 +16,12 @@
 //!   flag + timestamp record whether the current number came from the heuristic or the AI, so
 //!   the frontend can show that distinction. A new `record_payment` clears the flag, since the
 //!   heuristic recompute overwrites the AI's number until the AI runs again.
+//! - `fiado_enabled` defaults to `false` for every bodega and can only be toggled by the
+//!   bodega itself (keyed on `msg.sender`, no separate access-control list needed). Real
+//!   bodegas don't always fiar — it's the owner's call ("hoy no se fía, mañana sí") — so the
+//!   frontend hides the fiado UI entirely unless the bodega has opted in. Payment history and
+//!   scoring still accumulate regardless, so there's already a track record the moment a
+//!   bodega flips the switch on.
 //!
 //! Note: this code is a hackathon-stage contract and has not been audited.
 
@@ -67,6 +73,8 @@ sol_storage! {
         mapping(address => uint256) credit_limit;
         mapping(address => bool) ai_adjusted;
         mapping(address => uint256) ai_adjusted_at;
+
+        mapping(address => bool) fiado_enabled;
     }
 }
 
@@ -156,6 +164,19 @@ impl FiadoScoring {
 
     pub fn get_ai_adjustment_info(&self, bodega: Address) -> (bool, U256) {
         (self.ai_adjusted.get(bodega), self.ai_adjusted_at.get(bodega))
+    }
+
+    /// Whether `bodega` currently offers fiado. Defaults to `false` — fiado is opt-in per
+    /// bodega, not automatic just because a payment history exists.
+    pub fn is_fiado_enabled(&self, bodega: Address) -> bool {
+        self.fiado_enabled.get(bodega)
+    }
+
+    /// Turns fiado on/off for the caller's own bodega. Only the bodega itself can do this —
+    /// there's no separate registry to check, since keying on `msg.sender` already scopes it.
+    pub fn set_fiado_enabled(&mut self, enabled: bool) {
+        let bodega = self.vm().msg_sender();
+        self.fiado_enabled.setter(bodega).set(enabled);
     }
 
     pub fn get_payment_history(&self, bodega: Address) -> (Vec<U256>, Vec<U256>) {
@@ -330,5 +351,29 @@ mod test {
         assert_eq!(contract.get_credit_limit(bodega), U256::from(500));
         let (ai_adjusted, _) = contract.get_ai_adjustment_info(bodega);
         assert!(ai_adjusted);
+    }
+
+    #[test]
+    fn test_fiado_enabled_defaults_off_and_only_self_toggles() {
+        let vm = TestVM::default();
+        let mut contract = FiadoScoring::from(&vm);
+
+        let bodega = Address::from([3u8; 20]);
+        let other = Address::from([9u8; 20]);
+
+        assert!(!contract.is_fiado_enabled(bodega));
+
+        // `other` toggling only affects its own flag, never `bodega`'s.
+        vm.set_sender(other);
+        contract.set_fiado_enabled(true);
+        assert!(!contract.is_fiado_enabled(bodega));
+        assert!(contract.is_fiado_enabled(other));
+
+        vm.set_sender(bodega);
+        contract.set_fiado_enabled(true);
+        assert!(contract.is_fiado_enabled(bodega));
+
+        contract.set_fiado_enabled(false);
+        assert!(!contract.is_fiado_enabled(bodega));
     }
 }

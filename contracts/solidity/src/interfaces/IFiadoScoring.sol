@@ -32,4 +32,12 @@ interface IFiadoScoring {
     /// @notice Update the score/limit from the AI oracle. Restricted on the Stylus side to the
     /// configured ai_oracle address.
     function updateScoreFromAi(address bodega, uint256 score, uint256 limit) external;
+
+    /// @notice Whether `bodega` currently offers fiado. Defaults to false — opt-in per bodega,
+    /// not automatic just because a payment history exists.
+    function isFiadoEnabled(address bodega) external view returns (bool);
+
+    /// @notice Turns fiado on/off for the caller's own bodega (`msg.sender`). No separate
+    /// registry check — only a bodega can toggle its own flag.
+    function setFiadoEnabled(bool enabled) external;
 }

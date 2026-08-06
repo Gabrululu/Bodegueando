@@ -23,6 +23,9 @@ target/
 contracts/stylus-fiado-scoring/target/
 .private-key*
 
+# Runtime data (not secrets, but not project source either)
+frontend/.data/
+
 # Misc
 .DS_Store
 *.log
