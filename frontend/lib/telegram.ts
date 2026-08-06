@@ -34,6 +34,20 @@ export function getChatIdForBodega(bodegaAddress: string): number | undefined {
   return readLinks()[bodegaAddress.toLowerCase()];
 }
 
+export function linkChatToAddress(address: string, chatId: number): void {
+  const links = readLinks();
+  links[address.toLowerCase()] = chatId;
+  writeLinks(links);
+}
+
+export function getAddressForChat(chatId: number): string | undefined {
+  const links = readLinks();
+  for (const [address, linkedChatId] of Object.entries(links)) {
+    if (linkedChatId === chatId) return address;
+  }
+  return undefined;
+}
+
 export async function sendTelegramMessage(chatId: number, text: string): Promise<boolean> {
   if (!API_BASE) return false;
   const res = await fetch(`${API_BASE}/sendMessage`, {
@@ -44,33 +58,3 @@ export async function sendTelegramMessage(chatId: number, text: string): Promise
   return res.ok;
 }
 
-interface TelegramUpdate {
-  update_id: number;
-  message?: { chat: { id: number }; text?: string };
-}
-
-/**
- * Scans recent messages sent to the bot for an exact `/vincular <bodegaAddress>` and,
- * if found, saves the chat_id → bodega mapping. Doesn't advance the update offset, so
- * the message stays discoverable across repeated calls until Telegram's own backlog
- * rolls it off — fine for a "click to link" UI flow.
- */
-export async function linkBodegaFromRecentMessages(bodegaAddress: string): Promise<boolean> {
-  if (!API_BASE) return false;
-  const res = await fetch(`${API_BASE}/getUpdates?limit=100`);
-  if (!res.ok) return false;
-  const data = (await res.json()) as { ok: boolean; result: TelegramUpdate[] };
-  if (!data.ok) return false;
-
-  const target = `/vincular ${bodegaAddress.toLowerCase()}`;
-  for (const update of data.result) {
-    const text = update.message?.text?.trim().toLowerCase();
-    if (text === target && update.message) {
-      const links = readLinks();
-      links[bodegaAddress.toLowerCase()] = update.message.chat.id;
-      writeLinks(links);
-      return true;
-    }
-  }
-  return false;
-}

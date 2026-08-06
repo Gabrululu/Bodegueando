@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { fiadoScoringAbi, fiadoScoringAddress, paymentRouterAddress } from "@/lib/contracts";
 import { RISK_COLOR, RISK_LABEL, confianzaLabel, type AiRecommendation } from "@/lib/fiado";
+import { useExchangeRate } from "@/lib/useExchangeRate";
 
 /**
  * Vista del bodeguero: su propio código para cobrar, el interruptor de fiado, y
@@ -21,6 +22,10 @@ export function BodegaOwnerPanel() {
   const [telegramLinked, setTelegramLinked] = useState<boolean | null>(null);
   const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
   const [telegramMessage, setTelegramMessage] = useState<string | null>(null);
+  const [linkCode, setLinkCode] = useState<string | null>(null);
+  const [isGeneratingCode, setIsGeneratingCode] = useState(false);
+
+  const { formatSoles } = useExchangeRate();
 
   const contractsConfigured = Boolean(fiadoScoringAddress && paymentRouterAddress);
 
@@ -133,22 +138,37 @@ export function BodegaOwnerPanel() {
       .catch(() => setTelegramLinked(null));
   }, [address]);
 
-  async function handleLinkTelegram() {
+  async function handleGenerateCode() {
+    if (!address) return;
+    setIsGeneratingCode(true);
+    setTelegramMessage(null);
+    try {
+      const res = await fetch("/api/telegram/generate-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      const data = await res.json();
+      setLinkCode(data.code ?? null);
+    } catch {
+      setTelegramMessage("No pudimos generar el código. Intenta de nuevo.");
+    } finally {
+      setIsGeneratingCode(false);
+    }
+  }
+
+  async function handleCheckLinked() {
     if (!address) return;
     setIsLinkingTelegram(true);
     setTelegramMessage(null);
     try {
-      const res = await fetch("/api/telegram/link", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bodegaAddress: address }),
-      });
+      const res = await fetch(`/api/telegram/status?bodegaAddress=${address}`);
       const data = await res.json();
       setTelegramLinked(Boolean(data.linked));
       setTelegramMessage(
         data.linked
           ? "¡Listo! Vinculado."
-          : "Todavía no te veo escribiendo al bot. Mandale el mensaje primero y volvé a intentar.",
+          : "Todavía no te veo vinculado. Manda el mensaje al bot y volvé a intentar.",
       );
     } catch {
       setTelegramMessage("No pudimos revisar. Intenta de nuevo.");
@@ -222,7 +242,7 @@ export function BodegaOwnerPanel() {
           Fiado para tus clientes
         </h2>
         <p className="text-xs text-zinc-500">
-          Vos decidís si le fías a tus clientes. Podés prenderlo o apagarlo cuando quieras.
+          Tú decides si le fías a tus clientes. Puedes prenderlo o apagarlo cuando quieras.
         </p>
         <button
           onClick={() => handleToggle(!fiadoEnabled)}
@@ -242,8 +262,7 @@ export function BodegaOwnerPanel() {
             <div className="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-900">
               <p className="text-xs text-zinc-500">Fiado que le ofreces a cada cliente ahora mismo</p>
               <p className="text-2xl font-semibold">
-                {limitQuery.isLoading ? "…" : `${limitEth} ETH`}
-                <span className="ml-1 text-xs font-normal text-zinc-500">(moneda de prueba)</span>
+                {limitQuery.isLoading ? "…" : formatSoles(limitEth)}
               </p>
               <div className="mt-1 flex items-center gap-2 text-sm">
                 <span className="text-zinc-500">Confianza:</span>
@@ -269,7 +288,7 @@ export function BodegaOwnerPanel() {
                 <p>
                   Nuevo límite:{" "}
                   <span className="font-medium">
-                    {Number(aiResult.recommendation.creditLimitWei) / 1e18} ETH
+                    {formatSoles(Number(aiResult.recommendation.creditLimitWei) / 1e18)}
                   </span>{" "}
                   · Riesgo:{" "}
                   <span className={`font-medium ${RISK_COLOR[aiResult.recommendation.riskLevel]}`}>
@@ -296,11 +315,14 @@ export function BodegaOwnerPanel() {
       {TELEGRAM_BOT_USERNAME && (
         <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            Avisos por Telegram
+            Tu perfil por Telegram
           </h2>
           {telegramLinked ? (
             <>
-              <p className="text-xs text-green-600">✓ Activado — te vamos a avisar cuando te paguen.</p>
+              <p className="text-xs text-green-600">
+                ✓ Vinculado — te avisamos cuando te paguen y puedes escribirle /perfil al bot para ver tus
+                pagos y tu fiado cuando quieras.
+              </p>
               <button
                 onClick={handleTestNotify}
                 className="cursor-pointer rounded-md border border-zinc-400 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-600 dark:hover:bg-zinc-900"
@@ -311,23 +333,38 @@ export function BodegaOwnerPanel() {
           ) : (
             <>
               <p className="text-xs text-zinc-500">
-                Recibí un aviso en Telegram cada vez que te paguen. Dos pasos:
+                Vincula tu bodega con Telegram para recibir avisos cuando te paguen y consultar tus pagos y
+                tu fiado escribiéndole /perfil al bot, cuando quieras.
               </p>
-              <a
-                href={`https://t.me/${TELEGRAM_BOT_USERNAME}?text=${encodeURIComponent(`/vincular ${address}`)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="cursor-pointer rounded-md bg-black px-4 py-2 text-center text-sm font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-              >
-                1. Abrir el bot en Telegram y enviar el mensaje
-              </a>
-              <button
-                onClick={handleLinkTelegram}
-                disabled={isLinkingTelegram}
-                className="cursor-pointer rounded-md border border-zinc-400 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:hover:bg-zinc-900"
-              >
-                {isLinkingTelegram ? "Revisando..." : "2. Ya lo mandé, vincular"}
-              </button>
+              {!linkCode ? (
+                <button
+                  onClick={handleGenerateCode}
+                  disabled={isGeneratingCode}
+                  className="cursor-pointer rounded-md bg-black px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+                >
+                  {isGeneratingCode ? "Generando..." : "1. Generar mi código"}
+                </button>
+              ) : (
+                <>
+                  <p className="text-xs text-zinc-500">Tu código (vale por 10 minutos):</p>
+                  <p className="text-center text-2xl font-semibold tracking-widest">{linkCode}</p>
+                  <a
+                    href={`https://t.me/${TELEGRAM_BOT_USERNAME}?text=${encodeURIComponent(`/vincular ${linkCode}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="cursor-pointer rounded-md bg-black px-4 py-2 text-center text-sm font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+                  >
+                    2. Abrir el bot en Telegram y enviar el mensaje
+                  </a>
+                  <button
+                    onClick={handleCheckLinked}
+                    disabled={isLinkingTelegram}
+                    className="cursor-pointer rounded-md border border-zinc-400 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:hover:bg-zinc-900"
+                  >
+                    {isLinkingTelegram ? "Revisando..." : "3. Ya lo mandé, vincular"}
+                  </button>
+                </>
+              )}
             </>
           )}
           {telegramMessage && <p className="text-xs text-zinc-500">{telegramMessage}</p>}
