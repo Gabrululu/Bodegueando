@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "bot": "node --env-file=.env.local scripts/telegram-bot.mjs"
+    "bot": "node --env-file=.env.local scripts/telegram-bot.mjs",
+    "check-paymaster-balance": "node --env-file=.env.local scripts/check-paymaster-balance.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

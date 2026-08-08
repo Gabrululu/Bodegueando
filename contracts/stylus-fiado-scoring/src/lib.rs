@@ -30,6 +30,12 @@
 //!   (same `msg.sender`-keyed pattern as `set_fiado_enabled`, since no money moves when a
 //!   bodega fiar's someone); `repay_fiado` is `payment_router`-gated like `record_payment`,
 //!   since real ETH changes hands in `PaymentRouter.payFiado` before this updates the ledger.
+//! - `update_score_from_ai` is a circuit breaker, not a blank check: the AI can raise a
+//!   bodega's `credit_limit` to at most 2x what `heuristic_score_and_limit` would compute for
+//!   it right now from the real payment history (lowering it is always unrestricted — being
+//!   more conservative than the heuristic is never a risk). This bounds the blast radius of a
+//!   leaked `ai_oracle` key: even with the key, nobody can hand a bodega with no track record
+//!   an arbitrary fiado limit — the ceiling is still anchored to real on-chain history.
 //!
 //! Note: this code is a hackathon-stage contract and has not been audited.
 
@@ -60,12 +66,18 @@ sol! {
     error FiadoNotEnabled();
     #[derive(Debug)]
     error InsufficientLimit();
+    #[derive(Debug)]
+    error AiLimitOutOfRange();
 
     event PaymentRecorded(address indexed bodega, uint256 amount, uint256 timestamp);
     event ScoreUpdated(address indexed bodega, uint256 score, uint256 creditLimit, bool aiAdjusted);
     event FiadoExtended(address indexed bodega, address indexed customer, uint256 amount);
     event FiadoRepaid(address indexed bodega, address indexed customer, uint256 amount);
 }
+
+/// How far above the heuristic's own credit limit the AI oracle is allowed to push a
+/// bodega's limit. See the module doc comment for why this cap exists.
+const AI_LIMIT_MULTIPLIER_CAP: u64 = 2;
 
 #[derive(Debug, SolidityError)]
 pub enum FiadoError {
@@ -74,6 +86,7 @@ pub enum FiadoError {
     ZeroAmount(ZeroAmount),
     FiadoNotEnabled(FiadoNotEnabled),
     InsufficientLimit(InsufficientLimit),
+    AiLimitOutOfRange(AiLimitOutOfRange),
 }
 
 sol_storage! {
@@ -283,10 +296,22 @@ impl FiadoScoring {
         (amounts, timestamps)
     }
 
-    /// Overrides the heuristic score/limit with the AI module's recommendation.
+    /// Overrides the heuristic score/limit with the AI module's recommendation, bounded by
+    /// the circuit breaker described in the module doc comment: `limit` can be at most
+    /// `AI_LIMIT_MULTIPLIER_CAP`x what the heuristic itself would compute right now.
+    /// Lowering the limit below the heuristic's is always allowed, uncapped.
     pub fn update_score_from_ai(&mut self, bodega: Address, score: U256, limit: U256) -> Result<(), FiadoError> {
         if self.vm().msg_sender() != self.ai_oracle.get() {
             return Err(FiadoError::Unauthorized(Unauthorized {}));
+        }
+        if score > U256::from(MAX_SCORE) {
+            return Err(FiadoError::AiLimitOutOfRange(AiLimitOutOfRange {}));
+        }
+
+        let (_, heuristic_limit) = self.heuristic_score_and_limit(bodega);
+        let max_allowed_limit = heuristic_limit.saturating_mul(U256::from(AI_LIMIT_MULTIPLIER_CAP));
+        if limit > max_allowed_limit {
+            return Err(FiadoError::AiLimitOutOfRange(AiLimitOutOfRange {}));
         }
 
         let now = U256::from(self.vm().block_timestamp());
@@ -308,15 +333,16 @@ impl FiadoScoring {
         Ok(())
     }
 
-    /// Moving-average / frequency / mora heuristic over the bounded ring buffer. See the
+    /// Moving-average / frequency / mora heuristic over the bounded ring buffer, as a pure
+    /// read — no storage writes. Shared by `recompute_heuristic` (which persists the result
+    /// after `record_payment`) and `update_score_from_ai` (which uses it as the circuit
+    /// breaker's reference point, so a leaked `ai_oracle` key can at most double what the
+    /// real payment history already justifies, never invent credit from nothing). See the
     /// module doc comment for why this loop is the reason to use Stylus here.
-    fn recompute_heuristic(&mut self, bodega: Address) {
+    fn heuristic_score_and_limit(&self, bodega: Address) -> (u64, U256) {
         let count = self.recent_count.get(bodega).to::<usize>().min(HISTORY_SIZE);
         if count == 0 {
-            self.score.setter(bodega).set(U256::ZERO);
-            self.credit_limit.setter(bodega).set(U256::ZERO);
-            self.ai_adjusted.setter(bodega).set(false);
-            return;
+            return (0, U256::ZERO);
         }
 
         let amounts_slot = self.recent_amounts.getter(bodega);
@@ -363,17 +389,23 @@ impl FiadoScoring {
         let raw_score = base_score + frequency_score + volume_score;
         let final_score = raw_score.saturating_sub(mora_penalty).min(MAX_SCORE);
 
-        self.score.setter(bodega).set(U256::from(final_score));
-
         // Credit limit: average payment size scaled by score (out of MAX_SCORE), times a
         // fixed multiplier — deliberately simple for the MVP; the AI oracle path is where a
-        // more nuanced recommendation comes in.
+        // more nuanced recommendation comes in (bounded by AI_LIMIT_MULTIPLIER_CAP above).
         let limit = avg_amount
             .saturating_mul(U256::from(final_score))
             / U256::from(MAX_SCORE)
             * U256::from(3u64);
-        self.credit_limit.setter(bodega).set(limit);
 
+        (final_score, limit)
+    }
+
+    /// Persists `heuristic_score_and_limit`'s result and clears the AI-adjusted flag, since
+    /// a fresh heuristic recompute overwrites the AI's number until the AI runs again.
+    fn recompute_heuristic(&mut self, bodega: Address) {
+        let (final_score, limit) = self.heuristic_score_and_limit(bodega);
+        self.score.setter(bodega).set(U256::from(final_score));
+        self.credit_limit.setter(bodega).set(limit);
         self.ai_adjusted.setter(bodega).set(false);
     }
 }
@@ -427,20 +459,91 @@ mod test {
         let mut contract = FiadoScoring::from(&vm);
 
         let owner = Address::from([1u8; 20]);
+        let router = Address::from([2u8; 20]);
         let oracle = Address::from([4u8; 20]);
         let bodega = Address::from([3u8; 20]);
 
         contract.constructor(owner).unwrap();
         vm.set_sender(owner);
+        contract.set_payment_router(router).unwrap();
         contract.set_ai_oracle(oracle).unwrap();
 
+        // The circuit breaker anchors the AI's limit to the heuristic's own, so build some
+        // real history first instead of adjusting a bodega with zero track record.
+        vm.set_sender(router);
+        vm.set_block_timestamp(1_000_000);
+        contract.record_payment(bodega, U256::from(1_000_000_000_000_000_000u128), U256::ZERO).unwrap();
+        let heuristic_limit = contract.get_credit_limit(bodega);
+
         vm.set_sender(oracle);
-        contract.update_score_from_ai(bodega, U256::from(750), U256::from(500)).unwrap();
+        contract.update_score_from_ai(bodega, U256::from(750), heuristic_limit).unwrap();
 
         assert_eq!(contract.get_score(bodega), U256::from(750));
-        assert_eq!(contract.get_credit_limit(bodega), U256::from(500));
+        assert_eq!(contract.get_credit_limit(bodega), heuristic_limit);
         let (ai_adjusted, _) = contract.get_ai_adjustment_info(bodega);
         assert!(ai_adjusted);
+    }
+
+    #[test]
+    fn test_update_score_from_ai_rejects_limit_far_above_heuristic() {
+        let vm = TestVM::default();
+        let mut contract = FiadoScoring::from(&vm);
+
+        let owner = Address::from([1u8; 20]);
+        let router = Address::from([2u8; 20]);
+        let oracle = Address::from([4u8; 20]);
+        let bodega = Address::from([3u8; 20]);
+
+        contract.constructor(owner).unwrap();
+        vm.set_sender(owner);
+        contract.set_payment_router(router).unwrap();
+        contract.set_ai_oracle(oracle).unwrap();
+
+        vm.set_sender(router);
+        vm.set_block_timestamp(1_000_000);
+        contract.record_payment(bodega, U256::from(1_000_000_000_000_000_000u128), U256::ZERO).unwrap();
+        let heuristic_limit = contract.get_credit_limit(bodega);
+
+        vm.set_sender(oracle);
+        // 10x the heuristic limit is well above the 2x circuit-breaker cap.
+        let err = contract.update_score_from_ai(bodega, U256::from(900), heuristic_limit * U256::from(10u64));
+        assert!(err.is_err());
+
+        // A leaked oracle key can't invent a limit for a bodega with zero payment history
+        // either — the heuristic limit is 0, so max_allowed is 0.
+        let fresh_bodega = Address::from([7u8; 20]);
+        let err2 = contract.update_score_from_ai(fresh_bodega, U256::from(900), U256::from(1));
+        assert!(err2.is_err());
+
+        // A score above MAX_SCORE is rejected regardless of the limit.
+        let err3 = contract.update_score_from_ai(bodega, U256::from(1001), U256::ZERO);
+        assert!(err3.is_err());
+    }
+
+    #[test]
+    fn test_update_score_from_ai_can_lower_limit_below_heuristic_unrestricted() {
+        let vm = TestVM::default();
+        let mut contract = FiadoScoring::from(&vm);
+
+        let owner = Address::from([1u8; 20]);
+        let router = Address::from([2u8; 20]);
+        let oracle = Address::from([4u8; 20]);
+        let bodega = Address::from([3u8; 20]);
+
+        contract.constructor(owner).unwrap();
+        vm.set_sender(owner);
+        contract.set_payment_router(router).unwrap();
+        contract.set_ai_oracle(oracle).unwrap();
+
+        vm.set_sender(router);
+        vm.set_block_timestamp(1_000_000);
+        contract.record_payment(bodega, U256::from(1_000_000_000_000_000_000u128), U256::ZERO).unwrap();
+
+        vm.set_sender(oracle);
+        // A very conservative (near-zero) limit is always allowed, no matter the heuristic —
+        // being more cautious than the heuristic is never a risk.
+        contract.update_score_from_ai(bodega, U256::from(50), U256::from(1)).unwrap();
+        assert_eq!(contract.get_credit_limit(bodega), U256::from(1));
     }
 
     #[test]

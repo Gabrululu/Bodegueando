@@ -2,6 +2,11 @@
   "abi": [
     {
       "inputs": [],
+      "name": "AiLimitOutOfRange",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "FiadoNotEnabled",
       "type": "error"
     },

@@ -35,7 +35,7 @@ bodegueando/
 
 | Contrato | Dirección | Arbiscan |
 |---|---|---|
-| **FiadoScoring** (Stylus/Rust) | `0x0724643AdbC29CE231cd1D9fE10e72947b39D9AC` | [ver / verificado](https://sepolia.arbiscan.io/address/0x0724643AdbC29CE231cd1D9fE10e72947b39D9AC) |
+| **FiadoScoring** (Stylus/Rust) | `0x9C6868b6c8521854e65C622a848A2C0C9873b6Df` | [ver / verificado](https://sepolia.arbiscan.io/address/0x9C6868b6c8521854e65C622a848A2C0C9873b6Df) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
 | **PaymentRouter** | `0xF9cCfBbB2DE14240c680F8E8Fec337e4cB14c8fD` | [ver código verificado](https://sepolia.arbiscan.io/address/0xF9cCfBbB2DE14240c680F8E8Fec337e4cB14c8fD#code) |
 | **PuntosPaymaster** | `0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a` | [ver código verificado](https://sepolia.arbiscan.io/address/0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a#code) |
@@ -45,6 +45,12 @@ fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `
 no cambiaron — se reusaron tal cual (el minter de `PuntosToken` se re-vinculó al `PaymentRouter`
 nuevo). El `aiOracle` del `FiadoScoring` nuevo se volvió a autorizar con la misma cuenta que
 tenía el anterior.
+
+`FiadoScoring` se redesplegó una segunda vez el mismo día para agregar el circuit breaker del
+oráculo de IA (ver "Circuit breaker on-chain para el oráculo de IA" más abajo). Esta vez
+`PaymentRouter` **no** cambió — solo se le pidió que apunte a la `FiadoScoring` nueva con
+`setFiadoScoring` (función que ya existía, `onlyOwner`), sin redesplegarlo ni tocar su
+verificación.
 
 `PuntosToken`, `PaymentRouter` y `PuntosPaymaster` están verificados con código fuente Solidity legible en
 Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
@@ -170,6 +176,41 @@ El sobrepago y el control de acceso de `repayFiado` (solo `payment_router`) ya e
 por los tests locales, así que esta corrida se enfocó en probar el camino feliz completo con
 ETH real moviéndose entre dos cuentas distintas en Arbitrum Sepolia.
 
+### Circuit breaker on-chain para el oráculo de IA (probado en vivo)
+
+`app/api/fiado-score/route.ts` firma `updateScoreFromAi` con `ORACLE_PRIVATE_KEY`, una clave
+que vive como variable de entorno en el mismo proceso que sirve la web (ver "Atajos
+conscientes de hackathon" más abajo — es un atajo de hackathon documentado, no una elección de
+producción). Si esa clave se filtra, antes no había ningún límite: quien la tuviera podía
+fijarle a cualquier bodega un límite de fiado inventado, sin ningún historial real detrás.
+
+`FiadoScoring` ahora acota lo que el oráculo puede escribir: el límite que proponga puede ser
+como máximo el doble de lo que el propio heurístico on-chain (el mismo que corre en cada
+`record_payment`) calcularía para esa bodega en este momento. Bajar el límite (ser más
+conservador que el heurístico) sigue sin tope, porque nunca es un riesgo. La matemática del
+heurístico se extrajo a `heuristic_score_and_limit`, una función pura que tanto
+`recompute_heuristic` (la que ya corría en cada pago) como `update_score_from_ai` (la
+validación nueva) comparten — no hay dos cálculos que puedan desincronizarse.
+
+Cubierto con 3 tests nuevos/actualizados en `cargo test` (8/8 en total): que un límite dentro
+del 2× se acepta, que uno muy por encima revierte con `AiLimitOutOfRange`, y que bajar el
+límite sigue siendo libre sin importar el heurístico.
+
+**Corrida real en Arbitrum Sepolia** contra la `FiadoScoring` redesplegada
+(`0x9C6868b6c8521854e65C622a848A2C0C9873b6Df`):
+
+1. Con una bodega sin ningún historial en el contrato nuevo, se intentó
+   `updateScoreFromAi(bodega, 900, 100 ETH)` con la cuenta oracle — revirtió on-chain
+   (`AiLimitOutOfRange`, selector `0x482f64d6`). Ni con la clave del oráculo se puede inventar
+   crédito de la nada.
+2. Un cliente le pagó 0.0002 ETH a la bodega (mismo patrón de siempre), dejando un
+   `heuristic_limit` real de `255000000000000` wei.
+3. `updateScoreFromAi(bodega, 800, 1.5×heuristic_limit)` — aceptado, `getCreditLimit` pasó a
+   `382500000000000` wei.
+4. `updateScoreFromAi(bodega, 900, 3×heuristic_limit)` sobre la misma bodega, ahora con
+   historial real detrás — igual revirtió con el mismo selector. El tope escala con el
+   historial real, nunca lo ignora.
+
 ### El bot de Telegram como perfil (probado en vivo)
 
 Ni la web ni el bot muestran nunca "ETH" ni una dirección `0x...` al bodeguero o al
@@ -268,12 +309,12 @@ directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y preca
 - **Oráculo de IA con clave en el servidor.** `app/api/fiado-score/route.ts` firma la
   transacción `updateScoreFromAi` con una clave privada de testnet guardada en
   `ORACLE_PRIVATE_KEY` (variable de entorno del servidor Next.js). En producción esto
-  debería ser un servicio de firma dedicado, no una clave en el proceso del backend.
-- **Cuenta inteligente sin passkey todavía.** El login es Privy (teléfono/correo) y la smart
-  account usa esa wallet embebida como firmante — la meta de producto era login con passkey
-  (WebAuthn) como llave, pero eso es un paso más de integración que no cambia la arquitectura
-  de fondo (Privy también soporta passkeys); se priorizó tener el flujo completo de AA + gas
-  en PUNTOS funcionando primero.
+  debería ser un servicio de firma dedicado, no una clave en el proceso del backend — eso
+  sigue siendo cierto hoy. Lo que sí se agregó fue un límite al daño que esa clave puede hacer
+  si se filtra: `FiadoScoring.update_score_from_ai` ahora rechaza cualquier límite que el
+  oráculo proponga por encima del doble de lo que el heurístico on-chain ya justificaría con
+  el historial real — ver "Circuit breaker on-chain para el oráculo de IA". No reemplaza mover
+  la clave a un servicio aparte, pero acota el impacto mientras tanto.
 - **`SimpleAccount` (referencia de eth-infinitism), no Safe ni Kernel.** Es la implementación
   que usa la guía oficial de Pimlico para signers de Privy — menor superficie de riesgo que
   evaluar otra librería de smart accounts contra el reloj de la hackathon.
@@ -284,7 +325,12 @@ directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y preca
 - **El depósito de gas del paymaster se repone a mano.** `PuntosPaymaster` necesita ETH real
   depositado en el EntryPoint para poder patrocinar transacciones (`deposit()` / `cast send`);
   no hay una ruta automática que lo recargue sola — es responsabilidad de quien opera la app,
-  documentado así a propósito en vez de simular una automatización que no existe.
+  documentado así a propósito en vez de simular una automatización que no existe. Lo que sí
+  hay es una alerta: `pnpm run check-paymaster-balance` (`scripts/check-paymaster-balance.mjs`)
+  lee el depósito real del EntryPoint y manda un aviso por Telegram a `TELEGRAM_ADMIN_CHAT_ID`
+  si cae bajo `PAYMASTER_BALANCE_ALERT_THRESHOLD_ETH` (default `0.01` ETH) — para correr a
+  mano o desde un cron/CI. Sigue siendo *alerta*, no auto-repuesto: alguien sigue decidiendo
+  cuándo recargar, solo que ahora se entera a tiempo.
 - **El QR de la bodega necesita una URL real, no localhost.** `app/pagar/[code]/page.tsx` solo
   se puede escanear con la cámara del celular si la app está desplegada (Vercel u otro) —
   en `localhost` sigue funcionando el código de 6 dígitos escrito a mano.
@@ -323,8 +369,9 @@ marca qué parte de esto ya está construido y probado en testnet.
 2. **Abstracción de cuenta (ERC-4337)** — smart accounts creadas en el primer login,
    bundler (Pimlico) + paymaster propio (`PuntosPaymaster.sol`) que patrocina la primera
    transacción gratis y cobra el resto en PUNTOS — implementado y probado en vivo. Login por
-   passkey (WebAuthn) como firmante en vez de la wallet embebida de Privy queda como
-   siguiente paso, no cambia esta arquitectura.
+   passkey (WebAuthn) ya está habilitado como método de autenticación además de SMS/correo —
+   el firmante de la smart account sigue siendo la misma wallet embebida de Privy en los tres
+   casos, así que esto no cambió esta arquitectura, solo agregó una forma más de entrar.
 3. **Contratos on-chain (Arbitrum)** — el ledger de verdad, no una base de datos:
    - `PaymentRouter.sol` — procesa pagos, cashback, puntos y registro self-service de
      bodegas (`registerSelf`, implementado — `MerchantRegistry.sol` separado ya no hace
@@ -368,6 +415,9 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Fiado con scoring on-chain (`FiadoScoring`, Stylus) | ✅ Desplegado y verificado |
 | Fiado opt-in por bodega (`setFiadoEnabled`/`isFiadoEnabled`) | ✅ Desplegado — apagado por defecto, cada bodega prende el suyo |
 | Ledger de fiado por cliente (`extendFiado`/`repayFiado`/`payFiado`) | ✅ Probado en vivo end-to-end en Arbitrum Sepolia (además de 6/6 Rust, 17/17 Solidity) — ver "Fiado con libro de deuda real" |
+| Circuit breaker on-chain del oráculo de IA (`updateScoreFromAi` acotado al 2× del heurístico) | ✅ Probado en vivo en Arbitrum Sepolia (8/8 Rust) — ver "Circuit breaker on-chain para el oráculo de IA" |
+| Login con passkey (WebAuthn) además de SMS/correo | ✅ Habilitado — mismo embedded wallet como firmante, solo cambia el método de autenticación |
+| Alerta de balance bajo en `PuntosPaymaster` (`pnpm run check-paymaster-balance`) | ✅ Funcional — sigue siendo alerta, no auto-repuesto, a propósito |
 | Ajuste de fiado con IA (Claude, en español, escribe on-chain) | ✅ Probado en vivo end-to-end |
 | Dashboard web (leer score/límite, pagar, pedir recálculo IA) | ✅ Funcional |
 | Vistas separadas bodeguero/comprador, detectadas por rol on-chain | ✅ Funcional (`isBodega` en `PaymentRouter`) |
@@ -377,7 +427,6 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
 | Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS, ver "Login sin wallet..." |
 | Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
-| Login con passkey (WebAuthn) como firmante de la smart account | 🔜 Roadmap — hoy el firmante es la wallet embebida de Privy (igual de invisible para el usuario), passkey es un cambio de firmante, no de arquitectura |
 | Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
 | `InvoiceEscrow` (fiado con garantía) | 🔜 Roadmap, opcional |
 | Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
