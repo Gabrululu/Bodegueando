@@ -163,6 +163,43 @@ export function BodegaOwnerPanel() {
     Boolean(beneficioOwnerQuery.data) &&
     (beneficioOwnerQuery.data as string).toLowerCase() === (address as string).toLowerCase();
 
+  const bodegaRegistryQuery = useReadContract({
+    address: beneficioTokenAddress,
+    abi: beneficioTokenAbi,
+    functionName: "bodegaRegistry",
+    query: { enabled: Boolean(beneficioTokenAddress) },
+  });
+  const registryOutOfSync =
+    Boolean(bodegaRegistryQuery.data) &&
+    Boolean(paymentRouterAddress) &&
+    (bodegaRegistryQuery.data as string).toLowerCase() !== (paymentRouterAddress as string).toLowerCase();
+  const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
+  const [syncRegistryError, setSyncRegistryError] = useState<string | null>(null);
+  const [syncRegistryConfirmed, setSyncRegistryConfirmed] = useState(false);
+
+  async function handleSyncRegistry() {
+    if (!beneficioTokenAddress || !paymentRouterAddress || !smartAccountClient || !address) return;
+    setIsSyncingRegistry(true);
+    setSyncRegistryError(null);
+    setSyncRegistryConfirmed(false);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: beneficioTokenAddress,
+          abi: beneficioTokenAbi,
+          functionName: "setBodegaRegistry",
+          args: [paymentRouterAddress],
+        },
+      ]);
+      setSyncRegistryConfirmed(true);
+      bodegaRegistryQuery.refetch();
+    } catch {
+      setSyncRegistryError("No se pudo actualizar. Intenta de nuevo.");
+    } finally {
+      setIsSyncingRegistry(false);
+    }
+  }
+
   const refetchAll = () => {
     fiadoEnabledQuery.refetch();
     scoreQuery.refetch();
@@ -641,6 +678,24 @@ export function BodegaOwnerPanel() {
             (programas como Vaso de Leche o Pensión 65). Cada sol emitido solo se puede gastar
             en una bodega registrada — no se puede revender ni cambiar por efectivo.
           </p>
+          {registryOutOfSync && (
+            <div className="rounded-xl border border-amber-400/40 bg-amber-50 p-3">
+              <p className="text-xs text-[#6b6d64]">
+                El registro de bodegas que usa BeneficioToken para validar a quién se le puede
+                pagar quedó desactualizado (se redesplegó PaymentRouter). Actualizalo para que
+                las bodegas nuevas puedan recibir beneficios.
+              </p>
+              <button
+                onClick={handleSyncRegistry}
+                disabled={isSyncingRegistry}
+                className={`${outlineButtonClass} mt-2`}
+              >
+                {isSyncingRegistry ? "Actualizando..." : "Actualizar registro de bodegas"}
+              </button>
+              {syncRegistryError && <p className="mt-1 text-xs text-red-500">{syncRegistryError}</p>}
+              {syncRegistryConfirmed && <p className="mt-1 text-xs text-green-600">¡Listo! Registro actualizado ✓</p>}
+            </div>
+          )}
           <div className="flex flex-col gap-2">
             <label htmlFor="beneficiaryCode" className="text-sm font-medium text-[#0a0a0b]">
               Código del beneficiario

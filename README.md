@@ -37,7 +37,7 @@ bodegueando/
 |---|---|---|
 | **FiadoScoring** (Stylus/Rust) | `0x9C6868b6c8521854e65C622a848A2C0C9873b6Df` | [ver / verificado](https://sepolia.arbiscan.io/address/0x9C6868b6c8521854e65C622a848A2C0C9873b6Df) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
-| **PaymentRouter** | `0xF9cCfBbB2DE14240c680F8E8Fec337e4cB14c8fD` | [ver código verificado](https://sepolia.arbiscan.io/address/0xF9cCfBbB2DE14240c680F8E8Fec337e4cB14c8fD#code) |
+| **PaymentRouter** | `0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd#code) |
 | **PuntosPaymaster** | `0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a` | [ver código verificado](https://sepolia.arbiscan.io/address/0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a#code) |
 | **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
 
@@ -58,6 +58,15 @@ verificación.
 la cuenta deployer; ese mismo día se transfirió (`transferOwnership`) a la smart account de
 quien opera los programas sociales desde su sesión logueada — ver "`BeneficioToken.sol`" más
 abajo para el detalle de cómo se calculó esa dirección y el hash de la transacción.
+
+`PaymentRouter` se redesplegó una tercera vez el mismo día para arreglar un bug real
+descubierto en vivo: una bodega se queda sin PUNTOS para pagar gas después de su primera
+transacción gratis (ver "PUNTOS de bienvenida para bodegas" más abajo). `PuntosToken`,
+`FiadoScoring` y `PuntosPaymaster` no cambiaron — se reusaron tal cual, con el mismo relinkeo
+de minter que en el redeploy anterior. `BeneficioToken.setBodegaRegistry` también necesita
+apuntar al `PaymentRouter` nuevo; como su `owner` ya no es la cuenta deployer (ver arriba), esa
+actualización quedó como una acción de un clic en el panel de administrador en vez de un
+`cast send` — solo quien tenga esa sesión la puede autorizar.
 
 `PuntosToken`, `PaymentRouter`, `PuntosPaymaster` y `BeneficioToken` están verificados con código fuente Solidity legible en
 Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
@@ -418,6 +427,28 @@ punta a punta:
   ETH del pago original (`cashback = monto × cashbackBps`, en wei). El usuario nunca ve "gas"
   ni firma un popup de MetaMask; solo ve un botón que dice "Registrar" o "Pagar".
 
+**Bug real encontrado en vivo: una bodega se quedaba sin forma de pagar gas después de su
+primera transacción.** El cashback en PUNTOS solo lo mintea `receivePayment` a quien *paga*
+(`msg.sender`), nunca a la bodega que cobra — así que una cuenta que solo actúa como bodega
+(nunca compra nada en otro lado) nunca junta PUNTOS por su cuenta. Su única transacción
+gratuita es `registerSelf()` (el bootstrap); la siguiente — `setFiadoEnabled`, `extendFiado`,
+cualquier acción de bodega — pasa por `PuntosPaymaster._validatePaymasterUserOp`, que exige
+`balanceOf(cuenta) >= maxCost` y revierte con `InsufficientPuntosBalance` si no hay saldo. Con
+0 PUNTOS, *cualquier* bodega quedaba permanentemente bloqueada apenas un paso después de
+registrarse — confirmado leyendo `hasBootstrapped`/`balanceOf` directo on-chain contra una
+cuenta real que reportó justo ese síntoma ("No se pudo guardar. Intenta de nuevo." al intentar
+activar fiado).
+
+**Fix:** `registerSelf()` (y `registerBodega`) ahora mintean `BODEGA_BOOTSTRAP_PUNTOS`
+(0.005 ETH-equivalente, ~decenas de transacciones futuras) al momento del registro — el
+mismo mecanismo que ya existía para compradores (ganar PUNTOS de su acción calificante),
+aplicado a la acción calificante de una bodega. Probado end-to-end con una cuenta nueva
+(`registerSelf` con el `approve` de PUNTOS incluido en el mismo bootstrap, igual que hace
+`sendAndWait`, seguido de un `setFiadoEnabled` real pagado en PUNTOS desde el saldo de
+bienvenida) antes de dar el fix por confirmado, no solo por los tests unitarios — ver
+`test_RegisterSelf_MintsBootstrapPuntos` / `test_RegisterBodega_MintsBootstrapPuntos` en
+`test/PaymentRouter.t.sol` para la cobertura unitaria.
+
 Corrida real de punta a punta contra los contratos desplegados arriba (script standalone con
 `permissionless.js` + el bundler de Pimlico, sin pasar por el navegador, para aislar la
 infraestructura antes de probarla con Privy real):
@@ -597,7 +628,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Montos en soles (PEN) en vez de ETH, con tasa de cambio real | ✅ Funcional — conversión de display, ver "Atajos" |
 | Registro self-service de bodegas (`PaymentRouter.registerSelf`) | ✅ Probado en vivo — cualquiera se registra desde la web, sin admin |
 | Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
-| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS, ver "Login sin wallet..." |
+| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS. Incluye el fix de PUNTOS de bienvenida para bodegas (sin esto, quedaban bloqueadas tras registrarse), ver "Login sin wallet..." |
 | Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
 | Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
 | `InvoiceEscrow` (fiado con garantía) | 🔜 Roadmap, opcional |

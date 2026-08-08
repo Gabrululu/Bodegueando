@@ -18,6 +18,14 @@ contract PaymentRouter is Ownable {
 
     mapping(address => bool) public isBodega;
 
+    /// @notice PUNTOS minted to a bodega the moment it registers. A bodega never earns
+    /// cashback the normal way (only the payer does, in receivePayment) — without this, every
+    /// bodega account would be stuck after its one free-sponsored UserOperation
+    /// (PuntosPaymaster.sol), unable to ever pay gas for setFiadoEnabled/extendFiado again.
+    /// This mirrors, for bodegas, what a purchase does for buyers: give them PUNTOS from
+    /// their one qualifying on-chain action.
+    uint256 public constant BODEGA_BOOTSTRAP_PUNTOS = 0.005 ether;
+
     error ZeroAmount();
     error UnknownBodega();
     error CashbackTooHigh();
@@ -36,15 +44,19 @@ contract PaymentRouter is Ownable {
     function registerBodega(address bodega) external onlyOwner {
         isBodega[bodega] = true;
         emit BodegaRegistered(bodega);
+        puntosToken.mint(bodega, BODEGA_BOOTSTRAP_PUNTOS);
     }
 
     /// @notice Self-service registration: any address can register itself as a bodega, no
     /// admin approval needed. Safe because isBodega only gates who can be a *recipient* of
     /// receivePayment (a payment the payer themselves chose to send) — it grants no minting
-    /// rights and doesn't affect FiadoScoring's own msg.sender-gated fiado toggle.
+    /// rights and doesn't affect FiadoScoring's own msg.sender-gated fiado toggle. Mints
+    /// BODEGA_BOOTSTRAP_PUNTOS to the caller so they can actually operate afterward (toggle
+    /// fiado, extend fiado to customers) — see the constant's doc for why this is needed.
     function registerSelf() external {
         isBodega[msg.sender] = true;
         emit BodegaRegistered(msg.sender);
+        puntosToken.mint(msg.sender, BODEGA_BOOTSTRAP_PUNTOS);
     }
 
     function setFiadoScoring(IFiadoScoring _fiadoScoring) external onlyOwner {

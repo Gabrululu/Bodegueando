@@ -64,6 +64,21 @@ contract PaymentRouterTest is Test {
         assertTrue(router.isBodega(newBodega));
     }
 
+    function test_RegisterSelf_MintsBootstrapPuntos() public {
+        address newBodega = makeAddr("newBodega");
+        assertEq(token.balanceOf(newBodega), 0);
+
+        vm.prank(newBodega);
+        router.registerSelf();
+
+        assertEq(token.balanceOf(newBodega), router.BODEGA_BOOTSTRAP_PUNTOS());
+    }
+
+    function test_RegisterBodega_MintsBootstrapPuntos() public {
+        // `bodega` was registered by the owner in setUp() — assert the bootstrap landed there too.
+        assertEq(token.balanceOf(bodega), router.BODEGA_BOOTSTRAP_PUNTOS());
+    }
+
     function test_RevertWhen_NonOwnerCallsRegisterBodega() public {
         vm.prank(payer);
         vm.expectRevert();
