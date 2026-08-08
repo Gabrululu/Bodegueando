@@ -723,16 +723,16 @@ export function BodegaOwnerPanel() {
                     {linkCode}
                   </p>
                   <a
-                    href={`https://t.me/${TELEGRAM_BOT_USERNAME}?text=${encodeURIComponent(`/vincular ${linkCode}`)}`}
+                    href={`https://t.me/${TELEGRAM_BOT_USERNAME}?start=${linkCode}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className={`${primaryButtonClass} text-center`}
                     style={primaryButtonStyle}
                   >
-                    2. Abrir el bot en Telegram y enviar el mensaje
+                    2. Abrir el bot en Telegram y tocar Iniciar
                   </a>
                   <button onClick={handleCheckLinked} disabled={isLinkingTelegram} className={outlineButtonClass}>
-                    {isLinkingTelegram ? "Revisando..." : "3. Ya lo mandé, vincular"}
+                    {isLinkingTelegram ? "Revisando..." : "3. Ya lo hice, vincular"}
                   </button>
                 </>
               )}

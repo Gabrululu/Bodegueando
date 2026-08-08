@@ -70,7 +70,11 @@ async function handlePerfil(chatId) {
   }
 }
 
-async function handleStart(chatId) {
+async function handleStart(chatId, payload) {
+  if (payload) {
+    await handleVincular(chatId, payload);
+    return;
+  }
   await sendMessage(
     chatId,
     "👋 Bienvenido a Bodegueando.\n\n" +
@@ -86,8 +90,8 @@ async function handleUpdate(update) {
   const chatId = message.chat.id;
   const text = message.text.trim();
 
-  if (text === "/start") {
-    await handleStart(chatId);
+  if (text.startsWith("/start")) {
+    await handleStart(chatId, text.split(/\s+/)[1]);
   } else if (text.startsWith("/vincular")) {
     const code = text.split(/\s+/)[1];
     await handleVincular(chatId, code);

@@ -291,30 +291,71 @@ Ni la web ni el bot muestran nunca "ETH" ni una dirección `0x...` al bodeguero 
 comprador — todo se ve en soles, y la vinculación con Telegram se hace con un código
 de 6 dígitos, no pegando una dirección en el chat.
 
+**Webhook en producción, no polling — Vercel no puede correr un daemon.** La primera versión
+de esto usaba `scripts/telegram-bot.mjs`, un proceso Node aparte haciendo `getUpdates`
+(long-polling) sin parar. Eso funciona en una laptop con una terminal abierta, pero **no
+puede funcionar en Vercel**: cada función serverless responde una vez y se apaga, no hay forma
+de dejar un proceso escuchando para siempre. Con ese diseño, cualquier mensaje mandado al bot
+mientras la app estaba en producción se quedaba sin procesar en la cola de Telegram — se
+confirmó así al revisar `getWebhookInfo`/`getUpdates` directo contra la API de Telegram.
+
+La solución es que Telegram llame a una URL nuestra en vez de que nosotros le preguntemos todo
+el rato — un webhook, que sí encaja con el modelo de Vercel (una función que responde a un
+solo POST). `app/api/telegram/webhook/route.ts` cumple ese rol; la lógica de negocio (que
+antes vivía repartida entre el daemon y las rutas que llamaba) se movió a
+`lib/telegramCommands.ts` (despacho de `/start`, `/vincular`, `/perfil`) y
+`lib/telegramProfile.ts` (armado del texto de `/perfil`), para que el webhook y `GET
+/api/telegram/profile` (que sigue existiendo para el daemon de desarrollo) compartan el mismo
+código en vez de duplicarlo. El header `X-Telegram-Bot-Api-Secret-Token` (comparado contra
+`TELEGRAM_WEBHOOK_SECRET`) rechaza pedidos que no vengan realmente de Telegram.
+
 **Vinculación:**
 1. Desde `BodegaOwnerPanel.tsx` (o `BuyerPanel.tsx`, opcional para el comprador) se
    pide un código con "Generar mi código" → `POST /api/telegram/generate-code` guarda
    `{código → dirección}` en memoria (vence a los 10 minutos, un solo uso).
-2. Un botón abre `t.me/<bot>` con `/vincular <código>` precargado.
-3. `scripts/telegram-bot.mjs` (el daemon, corre aparte) recibe el mensaje y llama a
-   `POST /api/telegram/consume-code`, que guarda `chat_id → dirección` vía `lib/kv.ts`
-   (Upstash Redis en producción, `frontend/.data/telegram-links.json` en desarrollo local —
-   ver "Storage: Upstash Redis en producción" más abajo).
+2. Un botón abre `t.me/<bot>?start=<código>`. Se usa el mecanismo de `/start` con payload,
+   *no* `?text=/vincular <código>` — probado en vivo que ese segundo formato es poco confiable:
+   como `/vincular` ya está registrado como comando del bot, el cliente de Telegram a veces lo
+   reconoce y lo manda solo, cortando el código antes de que el usuario pueda completarlo.
+   `?start=` es el mecanismo que Telegram diseñó exactamente para este caso (deep link con un
+   parámetro) y siempre llega completo.
+3. El webhook recibe `/start <código>` y llama a la misma lógica que `/vincular <código>`,
+   que guarda `chat_id → dirección` vía `lib/kv.ts` (Upstash Redis en producción,
+   `frontend/.data/telegram-links.json` en desarrollo local — ver "Storage: Upstash Redis en
+   producción" más abajo).
 4. La web hace poll de `GET /api/telegram/status` hasta ver el link confirmado.
 
 **Perfil por chat:** una vez vinculado, cualquiera —bodeguero o comprador— puede
-escribirle `/perfil` al bot en cualquier momento, no solo recibir avisos push. El
-daemon reenvía el pedido a `GET /api/telegram/profile?chatId=...`, que lee
+escribirle `/perfil` al bot en cualquier momento, no solo recibir avisos push. Lee
 `PaymentRouter.isBodega` para decidir el rol y arma la respuesta:
 
 - **Bodega:** pagos recibidos, nivel de confianza y cuánto fiado ofrece (en soles).
 - **Comprador:** puntos de cashback acumulados (convertidos a soles).
 
-Para correr el bot en desarrollo (además de `pnpm run dev`, en otra terminal):
+**Registrar el webhook** (una sola vez, después de desplegar el código de
+`app/api/telegram/webhook`):
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://<tu-dominio>/api/telegram/webhook", "secret_token": "<TELEGRAM_WEBHOOK_SECRET>"}'
+```
+
+**Desarrollo local:** sin una URL pública HTTPS, Telegram no puede llamar al webhook, así que
+en local se sigue usando el daemon de polling (`scripts/telegram-bot.mjs`, sin secreto, sin
+webhook), corriendo aparte de `pnpm run dev`:
 
 ```bash
 cd frontend
 pnpm run bot
+```
+
+**Lista de comandos para @BotFather** (`/setcommands` → elegir el bot → pegar tal cual):
+
+```
+start - Ver cómo vincular tu cuenta de Bodegueando
+vincular - Vincular tu cuenta con tu código de 6 dígitos (ej. /vincular 123456)
+perfil - Ver tus pagos, puntos o fiado
 ```
 
 Corrida real de punta a punta contra los contratos desplegados arriba:
@@ -450,11 +491,12 @@ directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y preca
   más baja del proyecto. WhatsApp Business API requiere aprobación de permisos de
   Meta — por eso **Telegram se implementó primero**: mismo objetivo (avisar al
   bodeguero cuando le pagan), sin ese trámite, mucho más rápido de demostrar.
-- **Vinculación de Telegram por polling, no webhook.** `scripts/telegram-bot.mjs`
-  (el daemon del bot) usa `getUpdates` (long-polling) en vez de un webhook de
-  Telegram, porque un webhook necesita una URL pública HTTPS y el server de
-  desarrollo corre en localhost sin túnel. El mapeo chat_id ↔ dirección se guarda vía
-  `lib/kv.ts` — ver "Storage: Upstash Redis en producción".
+- **Telegram: webhook en producción, polling solo en desarrollo local.**
+  `app/api/telegram/webhook/route.ts` es lo que corre de verdad contra Vercel — un daemon de
+  polling (`getUpdates` sin parar) no puede correr ahí, cada función serverless responde una
+  vez y se apaga. `scripts/telegram-bot.mjs` se mantiene solo para desarrollo local, donde no
+  hay una URL pública HTTPS para que Telegram le pegue a un webhook. El mapeo chat_id ↔
+  dirección se guarda vía `lib/kv.ts` — ver "Storage: Upstash Redis en producción".
 - **Tasa de cambio ETH → PEN de solo lectura, cacheada.** `lib/exchangeRate.ts` trae
   ETH/USD de CoinGecko y USD/PEN de open.er-api.com (ambas sin API key; se descartó
   frankfurter.app porque solo cubre monedas de referencia del BCE y no incluye
@@ -535,7 +577,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Ajuste de fiado con IA (Claude, en español, escribe on-chain) | ✅ Probado en vivo end-to-end |
 | Dashboard web (leer score/límite, pagar, pedir recálculo IA) | ✅ Funcional |
 | Vistas separadas bodeguero/comprador, detectadas por rol on-chain | ✅ Funcional (`isBodega` en `PaymentRouter`) |
-| Avisos de pago y perfil (`/perfil`) por Telegram, todo en soles | ✅ Funcional — vinculación por código de 6 dígitos + daemon de polling, ver "El bot de Telegram como perfil" |
+| Avisos de pago y perfil (`/perfil`) por Telegram, todo en soles | ✅ Funcional — webhook en producción (el daemon de polling no puede correr en Vercel), vinculación por código de 6 dígitos vía deep link `/start`, ver "El bot de Telegram como perfil" |
 | Montos en soles (PEN) en vez de ETH, con tasa de cambio real | ✅ Funcional — conversión de display, ver "Atajos" |
 | Registro self-service de bodegas (`PaymentRouter.registerSelf`) | ✅ Probado en vivo — cualquiera se registra desde la web, sin admin |
 | Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
