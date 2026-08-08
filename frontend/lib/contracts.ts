@@ -1,6 +1,7 @@
 import PaymentRouterArtifact from "./abis/PaymentRouter.json";
 import PuntosTokenArtifact from "./abis/PuntosToken.json";
 import FiadoScoringArtifact from "./abis/FiadoScoring.json";
+import BeneficioTokenArtifact from "./abis/BeneficioToken.json";
 
 /**
  * Contract addresses come from env vars, filled in after deploying with
@@ -19,7 +20,10 @@ export const puntosTokenAddress = process.env
   .NEXT_PUBLIC_PUNTOS_TOKEN_ADDRESS as `0x${string}` | undefined;
 export const fiadoScoringAddress = process.env
   .NEXT_PUBLIC_FIADO_SCORING_ADDRESS as `0x${string}` | undefined;
+export const beneficioTokenAddress = process.env
+  .NEXT_PUBLIC_BENEFICIO_TOKEN_ADDRESS as `0x${string}` | undefined;
 
 export const paymentRouterAbi = PaymentRouterArtifact.abi;
 export const puntosTokenAbi = PuntosTokenArtifact.abi;
 export const fiadoScoringAbi = FiadoScoringArtifact.abi;
+export const beneficioTokenAbi = BeneficioTokenArtifact.abi;

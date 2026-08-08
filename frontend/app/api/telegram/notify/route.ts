@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "text is required" }, { status: 400 });
   }
 
-  const chatId = getChatIdForBodega(bodegaAddress);
+  const chatId = await getChatIdForBodega(bodegaAddress);
   if (!chatId) {
     return NextResponse.json({ sent: false, reason: "not_linked" });
   }

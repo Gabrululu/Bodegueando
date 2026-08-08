@@ -1,47 +1,35 @@
-import fs from "fs";
-import path from "path";
+import { readJsonStore, writeJsonStore } from "./kv";
 
 /**
  * Server-only Telegram Bot API helpers. Never import this from a client component —
- * it reads TELEGRAM_BOT_TOKEN (a secret) and touches the filesystem.
+ * it reads TELEGRAM_BOT_TOKEN (a secret).
  *
  * Linking a bodega to a chat uses long-polling (`getUpdates`) instead of a webhook, on
  * purpose: webhooks need a public HTTPS URL, which a local/hackathon dev server doesn't
  * have without a tunnel. `getUpdates` works from anywhere, including localhost. The
- * bodega→chat_id mapping is a small JSON file, not a database — deliberately minimal for
- * the demo; see README for the shortcut note.
+ * bodega→chat_id mapping goes through lib/kv.ts (Redis in production, a JSON file locally).
  */
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const API_BASE = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null;
 
-const STORE_PATH = path.join(process.cwd(), ".data", "telegram-links.json");
+const STORE_NAME = "telegram-links";
 
-function readLinks(): Record<string, number> {
-  try {
-    return JSON.parse(fs.readFileSync(STORE_PATH, "utf-8"));
-  } catch {
-    return {};
-  }
+type Links = Record<string, number>;
+
+export async function getChatIdForBodega(bodegaAddress: string): Promise<number | undefined> {
+  const links = await readJsonStore<Links>(STORE_NAME, {});
+  return links[bodegaAddress.toLowerCase()];
 }
 
-function writeLinks(links: Record<string, number>) {
-  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(links, null, 2));
-}
-
-export function getChatIdForBodega(bodegaAddress: string): number | undefined {
-  return readLinks()[bodegaAddress.toLowerCase()];
-}
-
-export function linkChatToAddress(address: string, chatId: number): void {
-  const links = readLinks();
+export async function linkChatToAddress(address: string, chatId: number): Promise<void> {
+  const links = await readJsonStore<Links>(STORE_NAME, {});
   links[address.toLowerCase()] = chatId;
-  writeLinks(links);
+  await writeJsonStore(STORE_NAME, links);
 }
 
-export function getAddressForChat(chatId: number): string | undefined {
-  const links = readLinks();
+export async function getAddressForChat(chatId: number): Promise<string | undefined> {
+  const links = await readJsonStore<Links>(STORE_NAME, {});
   for (const [address, linkedChatId] of Object.entries(links)) {
     if (linkedChatId === chatId) return address;
   }
@@ -57,4 +45,3 @@ export async function sendTelegramMessage(chatId: number, text: string): Promise
   });
   return res.ok;
 }
-

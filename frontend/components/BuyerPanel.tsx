@@ -8,6 +8,8 @@ import {
   fiadoScoringAddress,
   paymentRouterAbi,
   paymentRouterAddress,
+  beneficioTokenAbi,
+  beneficioTokenAddress,
 } from "@/lib/contracts";
 import { confianzaLabel } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -59,6 +61,10 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   const [isRepaySubmitting, setIsRepaySubmitting] = useState(false);
   const [repayError, setRepayError] = useState<string | null>(null);
   const [isRepayConfirmed, setIsRepayConfirmed] = useState(false);
+  const [benefitAmountSoles, setBenefitAmountSoles] = useState("");
+  const [isRedeemSubmitting, setIsRedeemSubmitting] = useState(false);
+  const [redeemError, setRedeemError] = useState<string | null>(null);
+  const [isRedeemConfirmed, setIsRedeemConfirmed] = useState(false);
 
   const contractsConfigured = Boolean(fiadoScoringAddress && paymentRouterAddress);
 
@@ -154,6 +160,58 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       setRepayAmountSoles(((Number(debtWei) / 1e18) * ethPen).toFixed(2));
     }
   }, [debtWei, ethPen, repayAmountSoles]);
+
+  const benefitBalanceQuery = useReadContract({
+    address: beneficioTokenAddress,
+    abi: beneficioTokenAbi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address && beneficioTokenAddress) },
+  });
+  const benefitExpiryQuery = useReadContract({
+    address: beneficioTokenAddress,
+    abi: beneficioTokenAbi,
+    functionName: "expiresAt",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address && beneficioTokenAddress) },
+  });
+  const benefitBalanceWei = (benefitBalanceQuery.data as bigint | undefined) ?? BigInt(0);
+  const benefitExpiresAt = Number((benefitExpiryQuery.data as bigint | undefined) ?? BigInt(0));
+  // No se pre-valida el vencimiento acá: BeneficioToken._update ya lo hace cumplir on-chain
+  // (revierte con BenefitExpired), así que si el beneficio venció, el intento de pago
+  // simplemente revierte y se muestra el mismo mensaje de error genérico de abajo.
+  const hasBenefit = benefitBalanceWei > BigInt(0);
+
+  useEffect(() => {
+    if (hasBenefit && bodegaAddress && benefitAmountSoles === "") {
+      setBenefitAmountSoles((Number(benefitBalanceWei) / 1e18).toFixed(2));
+    }
+  }, [hasBenefit, bodegaAddress, benefitBalanceWei, benefitAmountSoles]);
+
+  async function handleRedeemBenefit() {
+    if (!bodegaAddress || !beneficioTokenAddress || !smartAccountClient || !address) return;
+    setIsRedeemSubmitting(true);
+    setRedeemError(null);
+    setIsRedeemConfirmed(false);
+    try {
+      const amountWei = parseEther((benefitAmountSoles || "0").trim() || "0");
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: beneficioTokenAddress,
+          abi: beneficioTokenAbi,
+          functionName: "transfer",
+          args: [bodegaAddress, amountWei],
+        },
+      ]);
+      setIsRedeemConfirmed(true);
+      setBenefitAmountSoles("");
+      benefitBalanceQuery.refetch();
+    } catch {
+      setRedeemError("No se pudo pagar con tu beneficio. Revisa el monto e intenta de nuevo.");
+    } finally {
+      setIsRedeemSubmitting(false);
+    }
+  }
 
   async function handleRepay() {
     if (!bodegaAddress || !paymentRouterAddress || !smartAccountClient || !address) return;
@@ -365,6 +423,49 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       )}
       {bodegaAddress && !fiadoEnabled && !fiadoEnabledQuery.isLoading && (
         <p className="text-xs text-[#8f9189]">Esta bodega no ofrece fiado por ahora.</p>
+      )}
+
+      {isConnected && hasBenefit && (
+        <div className={highlightBoxClass}>
+          <div>
+            <p className="text-xs text-[#6b6d64]">Tu beneficio social disponible</p>
+            <p className="text-2xl font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+              S/ {(Number(benefitBalanceWei) / 1e18).toFixed(2)}
+            </p>
+            {benefitExpiresAt > 0 && (
+              <p className="text-xs text-[#6b6d64]">
+                Vence el {new Date(benefitExpiresAt * 1000).toLocaleDateString("es-PE")}
+              </p>
+            )}
+          </div>
+          <p className="text-xs text-[#6b6d64]">
+            Solo se puede gastar en una bodega registrada — no se puede cambiar por efectivo ni
+            mandarlo a otra persona.
+          </p>
+          {bodegaAddress ? (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-[#6b6d64]">S/</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.5"
+                  value={benefitAmountSoles}
+                  onChange={(e) => setBenefitAmountSoles(e.target.value)}
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                />
+              </div>
+              <button onClick={handleRedeemBenefit} disabled={isRedeemSubmitting} className={outlineButtonClass}>
+                {isRedeemSubmitting ? "Pagando..." : "Pagar con tu beneficio social"}
+              </button>
+              {redeemError && <p className="text-xs text-red-500">{redeemError}</p>}
+              {isRedeemConfirmed && <p className="text-xs text-green-600">¡Listo! Se pagó con tu beneficio ✓</p>}
+            </>
+          ) : (
+            <p className="text-xs text-[#8f9189]">Escribe el código de la bodega arriba para pagar con esto.</p>
+          )}
+        </div>
       )}
 
       <section className={cardClass}>

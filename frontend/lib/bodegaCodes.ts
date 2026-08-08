@@ -1,5 +1,4 @@
-import fs from "fs";
-import path from "path";
+import { readJsonStore, writeJsonStore } from "./kv";
 
 /**
  * Server-only, permanent code store for bodegas — deliberately separate from
@@ -7,32 +6,21 @@ import path from "path";
  * goes on a physical sign/QR in the store and gets scanned for months, so it must never
  * expire and must always resolve to the same address once created.
  */
-const STORE_PATH = path.join(process.cwd(), ".data", "bodega-codes.json");
+const STORE_NAME = "bodega-codes";
 
 interface Store {
   codeToAddress: Record<string, string>;
   addressToCode: Record<string, string>;
 }
 
-function readStore(): Store {
-  try {
-    return JSON.parse(fs.readFileSync(STORE_PATH, "utf-8"));
-  } catch {
-    return { codeToAddress: {}, addressToCode: {} };
-  }
-}
-
-function writeStore(store: Store) {
-  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
-}
+const EMPTY_STORE: Store = { codeToAddress: {}, addressToCode: {} };
 
 function generateSixDigitCode(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-export function getOrCreateCode(address: string): string {
-  const store = readStore();
+export async function getOrCreateCode(address: string): Promise<string> {
+  const store = await readJsonStore(STORE_NAME, EMPTY_STORE);
   const key = address.toLowerCase();
 
   const existing = store.addressToCode[key];
@@ -45,10 +33,11 @@ export function getOrCreateCode(address: string): string {
 
   store.codeToAddress[code] = key;
   store.addressToCode[key] = code;
-  writeStore(store);
+  await writeJsonStore(STORE_NAME, store);
   return code;
 }
 
-export function resolveCode(code: string): string | undefined {
-  return readStore().codeToAddress[code];
+export async function resolveCode(code: string): Promise<string | undefined> {
+  const store = await readJsonStore(STORE_NAME, EMPTY_STORE);
+  return store.codeToAddress[code];
 }

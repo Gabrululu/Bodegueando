@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "address must be a valid address" }, { status: 400 });
   }
 
-  const code = getOrCreateCode(address);
+  const code = await getOrCreateCode(address);
   return NextResponse.json({ code });
 }
 
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "code is required" }, { status: 400 });
   }
 
-  const address = resolveCode(code);
+  const address = await resolveCode(code);
   if (!address) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }

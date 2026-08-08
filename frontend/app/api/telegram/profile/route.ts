@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "chatId must be a number" }, { status: 400 });
   }
 
-  const address = getAddressForChat(chatId);
+  const address = await getAddressForChat(chatId);
   if (!address) {
     return NextResponse.json({
       text: "Todavía no vinculaste tu cuenta. Entra a la web, genera un código y mándame /vincular <código>.",

@@ -20,6 +20,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ linked: false });
   }
 
-  linkChatToAddress(address, chatId);
+  await linkChatToAddress(address, chatId);
   return NextResponse.json({ linked: true, address });
 }

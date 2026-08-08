@@ -39,6 +39,7 @@ bodegueando/
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
 | **PaymentRouter** | `0xF9cCfBbB2DE14240c680F8E8Fec337e4cB14c8fD` | [ver código verificado](https://sepolia.arbiscan.io/address/0xF9cCfBbB2DE14240c680F8E8Fec337e4cB14c8fD#code) |
 | **PuntosPaymaster** | `0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a` | [ver código verificado](https://sepolia.arbiscan.io/address/0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a#code) |
+| **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
 
 `FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
 fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `PuntosPaymaster`
@@ -52,7 +53,12 @@ oráculo de IA (ver "Circuit breaker on-chain para el oráculo de IA" más abajo
 `setFiadoScoring` (función que ya existía, `onlyOwner`), sin redesplegarlo ni tocar su
 verificación.
 
-`PuntosToken`, `PaymentRouter` y `PuntosPaymaster` están verificados con código fuente Solidity legible en
+`BeneficioToken` se desplegó el 2026-08-08, apuntando al `PaymentRouter` existente como su
+único `IBodegaRegistry` (no crea un segundo registro de bodegas). Su `owner` es la misma
+cuenta deployer que administra el resto del stack — ver "`BeneficioToken.sol`" más abajo para
+cómo eso se traduce en la UI del panel.
+
+`PuntosToken`, `PaymentRouter`, `PuntosPaymaster` y `BeneficioToken` están verificados con código fuente Solidity legible en
 Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
 `cargo stylus verify` — no muestra código fuente como Etherscan, pero prueba que el
 bytecode desplegado corresponde a un build reproducible de `src/lib.rs` dentro del
@@ -211,6 +217,74 @@ límite sigue siendo libre sin importar el heurístico.
    historial real detrás — igual revirtió con el mismo selector. El tope escala con el
    historial real, nunca lo ignora.
 
+### `BeneficioToken.sol` — PoC de programas sociales on-chain (Vaso de Leche, Qali Warma, Pensión 65)
+
+A diferencia de `PuntosToken` (libre, transferible entre cualquiera), `BeneficioToken` es un
+ERC-20 restringido: un beneficiario solo puede gastarlo transfiriéndolo a una bodega ya
+registrada en `PaymentRouter` (nunca revenderlo a otra persona ni cambiarlo por efectivo), y
+cada emisión vence a los `duration` segundos de emitida. La restricción vive en `_update`, el
+hook que ERC20 llama en *toda* transferencia (incluida `transferFrom`) — no hay forma de
+saltársela usando otra función del token.
+
+- **`issue(beneficiario, monto, duración)`** — solo el `owner` (en una integración real, la
+  municipalidad o el ministerio correspondiente) puede emitir beneficio.
+- **`transfer`/`transferFrom` normal** — funciona como "redimir": si el destino no es una
+  bodega registrada (`IBodegaRegistry.isBodega`, la misma fuente de verdad que ya usa
+  `PaymentRouter` — no hay un segundo registro que pueda desincronizarse) o si el beneficio del
+  emisor ya venció, revierte (`NotABodega` / `BenefitExpired`).
+
+**Qué NO resuelve esta PoC, a propósito:** no restringe la categoría del gasto ("solo
+alimentos") porque la app no tiene catálogo de productos — construirlo sería un proyecto
+aparte, no algo que este contrato pueda simular honestamente. Tampoco reclama solo el saldo
+vencido de vuelta al programa (necesitaría un keeper on-chain); el beneficio vencido
+simplemente deja de poder gastarse, se queda congelado en la wallet.
+
+Cubierto con 9 tests en `forge test` (26/26 en todo el repo, sin romper nada existente):
+emisión solo por el owner, vencimiento, gasto válido a una bodega registrada, el intento de
+revender a otra persona (el caso que justifica todo el contrato) revierte, y que
+`transferFrom` (aprobar a un tercero) queda sujeto a las mismas reglas que `transfer` directo.
+
+**Desplegado y verificado en Arbitrum Sepolia**, con una UI mínima de emisión conectada al
+mismo panel que ya usa cualquier bodega (`BodegaOwnerPanel.tsx`) — no un dashboard aparte:
+
+- **Quién puede emitir, de verdad, no solo en la UI.** `issue()` es `onlyOwner` — eso ya se
+  hacía cumplir on-chain desde el diseño original. Lo nuevo es que el panel ahora *lee* ese
+  mismo `owner()` (`useReadContract`, sin variable de entorno separada que pudiera
+  desincronizarse del contrato) y solo muestra la sección "Panel de administrador — Beneficios
+  sociales" a la cuenta que matchea. Nadie más la ve, y aunque alguien manipulara el frontend
+  para forzarla a aparecer, la llamada a `issue()` igual revertiría on-chain para cualquier
+  otra cuenta.
+- **Por qué hoy nadie logueado por Privy ve esa sección todavía.** El `owner` desplegado es la
+  cuenta EOA deployer de siempre (la misma que administra todos los demás contratos), y Privy
+  genera una *smart account nueva* por cada login — no existe una forma de "iniciar sesión
+  como" una clave privada externa preexistente a través del flujo normal de la app. Para que
+  quien opere los programas sociales vea la sección en su propia sesión logueada, el paso que
+  falta es transferir el ownership (`transferOwnership`, ya heredado de `Ownable`) a la
+  dirección de smart account que resulte de su login — un solo `cast send`, sin volver a tocar
+  código ni redesplegar nada. Mientras tanto, la emisión sigue siendo operable igual que
+  cualquier otro contrato de este repo: con `cast send` desde la cuenta deployer.
+- **Por qué esto no toca el fiado.** `extendFiado`/`setFiadoEnabled` siguen siendo
+  deliberadamente self-service y `msg.sender`-keyed — cada bodega controla únicamente su
+  propio fiado, sin lista de permisos aparte (ver "Fiado con libro de deuda real" más arriba).
+  Sumarle una capa de "solo un Admin" ahí revertiría esa decisión ya probada en vivo, así que
+  el nuevo panel de administrador es aditivo (vive en la misma pantalla que ya tiene fiado,
+  como una sección extra que solo un `owner` ve) en vez de restrictivo sobre algo que ya
+  funcionaba.
+
+**UI de canje, del lado del beneficiario (`BuyerPanel.tsx`).** Ya no hace falta salir de la
+app para gastar el beneficio como una transferencia ERC-20 genérica: en cuanto el cliente
+tiene saldo de `BeneficioToken` (`balanceOf > 0`), ve una tarjeta aparte —separada del pago en
+efectivo, nunca mezclada con el botón "Pagar" normal— con su saldo y fecha de vencimiento. El
+pago mismo (`transfer(bodega, monto)`) se habilita recién cuando también escribió el código de
+una bodega, reusando el mismo buscador de código que ya usa para pagar en efectivo o pagar su
+fiado. No se pre-valida el vencimiento en el frontend — si el beneficio ya venció, el intento
+de pago revierte on-chain (`BenefitExpired`, ver `_update` en `BeneficioToken.sol`) y se
+muestra un error genérico; la fuente de verdad sigue siendo el contrato, no un cálculo de
+fecha en el cliente.
+
+**Qué sigue faltando:** transferir el `owner()` de `BeneficioToken` a la smart account de
+quien vaya a operar la emisión desde su propia sesión logueada (ver arriba).
+
 ### El bot de Telegram como perfil (probado en vivo)
 
 Ni la web ni el bot muestran nunca "ETH" ni una dirección `0x...` al bodeguero o al
@@ -223,8 +297,9 @@ de 6 dígitos, no pegando una dirección en el chat.
    `{código → dirección}` en memoria (vence a los 10 minutos, un solo uso).
 2. Un botón abre `t.me/<bot>` con `/vincular <código>` precargado.
 3. `scripts/telegram-bot.mjs` (el daemon, corre aparte) recibe el mensaje y llama a
-   `POST /api/telegram/consume-code`, que guarda `chat_id → dirección` en
-   `frontend/.data/telegram-links.json`.
+   `POST /api/telegram/consume-code`, que guarda `chat_id → dirección` vía `lib/kv.ts`
+   (Upstash Redis en producción, `frontend/.data/telegram-links.json` en desarrollo local —
+   ver "Storage: Upstash Redis en producción" más abajo).
 4. La web hace poll de `GET /api/telegram/status` hasta ver el link confirmado.
 
 **Perfil por chat:** una vez vinculado, cualquiera —bodeguero o comprador— puede
@@ -252,6 +327,30 @@ Corrida real de punta a punta contra los contratos desplegados arriba:
    [tx `0x59afd6a7...`](https://sepolia.arbiscan.io/tx/0x59afd6a78efaf73276b055b8a371b10648e2b962052ab82ac7718153854712fb):
    mensaje de Telegram recibido al instante, ahora en soles (*"💰 Te pagaron S/ X.XX
    en Bodegueando."*).
+
+### Storage: Upstash Redis en producción, archivo local en desarrollo
+
+El filesystem de Vercel es efímero por invocación — dos requests al mismo endpoint pueden
+correr en instancias serverless distintas que nunca vieron lo que la otra escribió. Con la app
+ya desplegada en `bodegueando.vercel.app`, los dos stores que antes eran solo un JSON en
+`frontend/.data/` (`getOrCreateCode`/`resolveCode` de códigos de bodega/cliente, y el mapeo
+`chat_id ↔ dirección` de Telegram) corrían un riesgo real de comportarse de forma
+inconsistente en producción — no un problema teórico, sino algo que ya podía estar pasando.
+
+`lib/kv.ts` resuelve esto con dos backends detrás de la misma interfaz
+(`readJsonStore`/`writeJsonStore`):
+
+- **Con `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN` seteadas** (cuenta gratis en
+  [console.upstash.com](https://console.upstash.com)): usa Redis real vía REST — funciona
+  igual desde cualquier función serverless, sin necesidad de una conexión persistente.
+- **Sin esas variables**: cae de vuelta al archivo JSON de siempre bajo `.data/` — cero
+  fricción para seguir desarrollando en local sin crear una cuenta de Upstash.
+
+`lib/bodegaCodes.ts` y `lib/telegram.ts` se refactorizaron para usar esta abstracción (sus
+funciones pasaron de sync a `async`); las rutas API que las llaman ya eran `async`, así que
+solo hizo falta agregar los `await` correspondientes. Verificado localmente: el
+round-trip completo (generar código → resolverlo) sigue funcionando igual por el camino de
+fallback a archivo, sin credenciales de Upstash configuradas.
 
 ### Login sin wallet + registro self-service + gas pagado con PUNTOS (probado en vivo)
 
@@ -284,16 +383,29 @@ infraestructura antes de probarla con Privy real):
 3. `PaymentRouter` emite `BodegaRegistered` y `isBodega(smartAccount)` pasa a `true` on-chain.
 
 Después de esto se repitió el flujo completo en el navegador con un login real de Privy:
-entrar por teléfono/correo → caer directo en la vista de comprador → tocar "¿Tienes una
-bodega? Regístrala aquí" (sin popup de wallet, se siente instantáneo) → pasar a la vista de
-bodeguero, con un QR nuevo para cobrar (ver siguiente sección) — confirmado en vivo.
+entrar por teléfono/correo → elegir explícitamente "Soy bodeguero" (dispara `registerSelf()`,
+sin popup de wallet, se siente instantáneo) → pasar a la vista de bodeguero, con un QR nuevo
+para cobrar (ver siguiente sección) — confirmado en vivo.
+
+### Bodeguero y cliente son dos espacios separados, nunca combinados
+
+`app/app/page.tsx` no infiere el rol combinándolo con la vista del otro: una cuenta ya
+registrada como bodega (`isBodega` on-chain) va **directo** a `BodegaOwnerPanel`, sin
+posibilidad de ver `BuyerPanel` en la misma sesión. Una cuenta nueva ve una elección explícita
+antes de cualquier panel — "Soy bodeguero" / "Soy cliente" — en vez del diseño anterior, donde
+cualquiera que entraba caía primero en la vista de comprador con un link de "¿Tienes una
+bodega? Regístrala aquí" flotando dentro de esa misma pantalla (los dos espacios mezclados en
+una sola vista). "Soy bodeguero" dispara `registerSelf()` igual que antes; "Soy cliente" solo
+guarda la elección (`localStorage`, por dirección) para no volver a preguntar en próximas
+visitas — nunca se asume sola. El QR de bodega (`/pagar/[code]`, ver abajo) sigue sin pasar por
+ningún selector: escanear un QR ya es una intención de cliente inequívoca.
 
 ### Código de la bodega: QR + número corto, nunca una dirección (probado en vivo)
 
 `BodegaOwnerPanel.tsx` ya no muestra una dirección `0x...` para que el cliente la copie —
-genera un código permanente de 6 dígitos (`lib/bodegaCodes.ts`, guardado en
-`frontend/.data/bodega-codes.json`, sin expirar — a diferencia del código de Telegram, este
-tiene que seguir funcionando meses después, impreso en un cartel) y lo muestra como QR
+genera un código permanente de 6 dígitos (`lib/bodegaCodes.ts`, vía `lib/kv.ts`, sin expirar —
+a diferencia del código de Telegram, este tiene que seguir funcionando meses después, impreso
+en un cartel) y lo muestra como QR
 (`qrcode.react`) que codifica `https://<dominio>/pagar/<código>`.
 
 El cliente escanea con la cámara nativa del celular (sin librería de escaneo: la URL abre
@@ -341,9 +453,8 @@ directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y preca
 - **Vinculación de Telegram por polling, no webhook.** `scripts/telegram-bot.mjs`
   (el daemon del bot) usa `getUpdates` (long-polling) en vez de un webhook de
   Telegram, porque un webhook necesita una URL pública HTTPS y el server de
-  desarrollo corre en localhost sin túnel. El mapeo chat_id ↔ dirección se guarda en
-  `frontend/.data/telegram-links.json` (no versionado) — un archivo, no una base de
-  datos, alcanza para la demo.
+  desarrollo corre en localhost sin túnel. El mapeo chat_id ↔ dirección se guarda vía
+  `lib/kv.ts` — ver "Storage: Upstash Redis en producción".
 - **Tasa de cambio ETH → PEN de solo lectura, cacheada.** `lib/exchangeRate.ts` trae
   ETH/USD de CoinGecko y USD/PEN de open.er-api.com (ambas sin API key; se descartó
   frankfurter.app porque solo cubre monedas de referencia del BCE y no incluye
@@ -418,6 +529,9 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Circuit breaker on-chain del oráculo de IA (`updateScoreFromAi` acotado al 2× del heurístico) | ✅ Probado en vivo en Arbitrum Sepolia (8/8 Rust) — ver "Circuit breaker on-chain para el oráculo de IA" |
 | Login con passkey (WebAuthn) además de SMS/correo | ✅ Habilitado — mismo embedded wallet como firmante, solo cambia el método de autenticación |
 | Alerta de balance bajo en `PuntosPaymaster` (`pnpm run check-paymaster-balance`) | ✅ Funcional — sigue siendo alerta, no auto-repuesto, a propósito |
+| `BeneficioToken` — programas sociales restringidos (Vaso de Leche, Qali Warma, Pensión 65) | ✅ Desplegado y verificado en Arbitrum Sepolia (9/9, 26/26 en todo el repo). UI de emisión admin-only en el panel de bodega + UI de canje en el panel de cliente, ambas funcionales — falta transferir el ownership a una smart account logueada, ver "`BeneficioToken.sol`" |
+| Bodeguero/cliente como espacios separados (selector explícito, sin vistas combinadas) | ✅ Funcional — ver "Bodeguero y cliente son dos espacios separados" |
+| Códigos de bodega/cliente y vínculos de Telegram en Upstash Redis (no archivo local) | ✅ Funcional con fallback automático a archivo si no hay credenciales de Upstash — cierra el riesgo real del filesystem efímero de Vercel, ver "Storage: Upstash Redis en producción" |
 | Ajuste de fiado con IA (Claude, en español, escribe on-chain) | ✅ Probado en vivo end-to-end |
 | Dashboard web (leer score/límite, pagar, pedir recálculo IA) | ✅ Funcional |
 | Vistas separadas bodeguero/comprador, detectadas por rol on-chain | ✅ Funcional (`isBodega` en `PaymentRouter`) |
@@ -512,6 +626,17 @@ cd contracts/solidity
 PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> DEPOSIT_ETH=0.02ether \
   forge script script/DeployPuntosPaymaster.s.sol:DeployPuntosPaymaster \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+Deploy de `BeneficioToken` (requiere `PaymentRouter` ya desplegado, usado como
+`IBodegaRegistry`):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployBeneficioToken.s.sol:DeployBeneficioToken \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# opcional: cast send <BeneficioTokenAddress> "transferOwnership(address)" <smart account admin>
 ```
 
 ### Contrato Stylus (FiadoScoring)

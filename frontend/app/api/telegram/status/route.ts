@@ -9,6 +9,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "bodegaAddress must be a valid address" }, { status: 400 });
   }
 
-  const linked = getChatIdForBodega(bodegaAddress) !== undefined;
+  const linked = (await getChatIdForBodega(bodegaAddress)) !== undefined;
   return NextResponse.json({ linked });
 }

@@ -4,7 +4,13 @@ import { useEffect, useState } from "react";
 import { parseEther, type Address } from "viem";
 import { useReadContract } from "wagmi";
 import { QRCodeSVG } from "qrcode.react";
-import { fiadoScoringAbi, fiadoScoringAddress, paymentRouterAddress } from "@/lib/contracts";
+import {
+  fiadoScoringAbi,
+  fiadoScoringAddress,
+  paymentRouterAddress,
+  beneficioTokenAbi,
+  beneficioTokenAddress,
+} from "@/lib/contracts";
 import { RISK_COLOR, RISK_LABEL, confianzaLabel, type AiRecommendation } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
 import { sendAndWait, useSmartAccountClient } from "@/lib/smartAccount";
@@ -31,6 +37,16 @@ const outlineButtonClass =
   "cursor-pointer rounded-full border border-black/15 px-4 py-2 text-sm font-semibold text-[#0a0a0b] transition-colors hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-50";
 const highlightBoxClass = "rounded-xl border border-black/5 bg-[#c9e26514] p-4";
 
+function formatPaymentDate(unixSeconds: number): string {
+  if (!unixSeconds) return "";
+  return new Date(unixSeconds * 1000).toLocaleString("es-PE", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function BodegaOwnerPanel() {
   const { client: smartAccountClient, address, isLoading: isAccountLoading } = useSmartAccountClient();
   const [copied, setCopied] = useState(false);
@@ -53,6 +69,15 @@ export function BodegaOwnerPanel() {
   const [isFiarSubmitting, setIsFiarSubmitting] = useState(false);
   const [fiarError, setFiarError] = useState<string | null>(null);
   const [fiarConfirmed, setFiarConfirmed] = useState(false);
+  const [beneficiaryCodeInput, setBeneficiaryCodeInput] = useState("");
+  const [beneficiaryAddress, setBeneficiaryAddress] = useState<Address | undefined>(undefined);
+  const [isResolvingBeneficiary, setIsResolvingBeneficiary] = useState(false);
+  const [beneficiaryNotFound, setBeneficiaryNotFound] = useState(false);
+  const [issueAmountSoles, setIssueAmountSoles] = useState("50");
+  const [issueDurationDays, setIssueDurationDays] = useState("30");
+  const [isIssuing, setIsIssuing] = useState(false);
+  const [issueError, setIssueError] = useState<string | null>(null);
+  const [issueConfirmed, setIssueConfirmed] = useState(false);
 
   const { formatSoles, solesToEth } = useExchangeRate();
 
@@ -127,6 +152,17 @@ export function BodegaOwnerPanel() {
     query: { enabled: Boolean(address && fiadoScoringAddress) },
   });
 
+  const beneficioOwnerQuery = useReadContract({
+    address: beneficioTokenAddress,
+    abi: beneficioTokenAbi,
+    functionName: "owner",
+    query: { enabled: Boolean(beneficioTokenAddress) },
+  });
+  const isBeneficioAdmin =
+    Boolean(address) &&
+    Boolean(beneficioOwnerQuery.data) &&
+    (beneficioOwnerQuery.data as string).toLowerCase() === (address as string).toLowerCase();
+
   const refetchAll = () => {
     fiadoEnabledQuery.refetch();
     scoreQuery.refetch();
@@ -179,6 +215,77 @@ export function BodegaOwnerPanel() {
     if (!/^\d{6}$/.test(trimmed)) {
       setCustomerAddress(undefined);
       setCustomerNotFound(false);
+    }
+  }
+
+  const isValidBeneficiaryCodeFormat = /^\d{6}$/.test(beneficiaryCodeInput.trim());
+
+  useEffect(() => {
+    if (!isValidBeneficiaryCodeFormat) return;
+    const code = beneficiaryCodeInput.trim();
+    let cancelled = false;
+
+    async function resolve() {
+      setIsResolvingBeneficiary(true);
+      setBeneficiaryNotFound(false);
+      try {
+        const res = await fetch(`/api/bodega/code?code=${code}`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.address) {
+          setBeneficiaryAddress(data.address as Address);
+        } else {
+          setBeneficiaryAddress(undefined);
+          setBeneficiaryNotFound(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setBeneficiaryAddress(undefined);
+          setBeneficiaryNotFound(true);
+        }
+      } finally {
+        if (!cancelled) setIsResolvingBeneficiary(false);
+      }
+    }
+
+    resolve();
+    return () => {
+      cancelled = true;
+    };
+  }, [beneficiaryCodeInput, isValidBeneficiaryCodeFormat]);
+
+  function handleBeneficiaryCodeChange(value: string) {
+    const trimmed = value.trim();
+    setBeneficiaryCodeInput(trimmed);
+    if (!/^\d{6}$/.test(trimmed)) {
+      setBeneficiaryAddress(undefined);
+      setBeneficiaryNotFound(false);
+    }
+  }
+
+  async function handleIssue() {
+    if (!beneficiaryAddress || !beneficioTokenAddress || !smartAccountClient || !address) return;
+    setIsIssuing(true);
+    setIssueError(null);
+    setIssueConfirmed(false);
+    try {
+      const amountWei = parseEther((issueAmountSoles || "0").trim() || "0");
+      const durationDays = Math.max(1, Math.round(Number(issueDurationDays || "0")));
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: beneficioTokenAddress,
+          abi: beneficioTokenAbi,
+          functionName: "issue",
+          args: [beneficiaryAddress, amountWei, BigInt(durationDays * 86400)],
+        },
+      ]);
+      setIssueConfirmed(true);
+      setBeneficiaryCodeInput("");
+      setBeneficiaryAddress(undefined);
+    } catch {
+      setIssueError("No se pudo emitir el beneficio. Intenta de nuevo.");
+    } finally {
+      setIsIssuing(false);
     }
   }
 
@@ -339,7 +446,12 @@ export function BodegaOwnerPanel() {
   const limitEth = Number((limitQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18;
   const aiAdjusted = Boolean((aiInfoQuery.data as [boolean, bigint] | undefined)?.[0]);
   const confianza = confianzaLabel(score);
-  const paymentCount = ((historyQuery.data as [bigint[], bigint[]] | undefined)?.[0] ?? []).length;
+
+  const [paymentAmounts, paymentTimestamps] = (historyQuery.data as [bigint[], bigint[]] | undefined) ?? [[], []];
+  const payments = paymentAmounts
+    .map((amount, i) => ({ amountEth: Number(amount) / 1e18, timestamp: Number(paymentTimestamps[i] ?? BigInt(0)) }))
+    .sort((a, b) => b.timestamp - a.timestamp);
+  const totalReceivedEth = payments.reduce((sum, p) => sum + p.amountEth, 0);
 
   return (
     <div className="flex w-full max-w-md flex-col gap-8 text-left">
@@ -367,9 +479,35 @@ export function BodegaOwnerPanel() {
         ) : (
           <p className="text-xs text-[#6b6d64]">Generando tu código…</p>
         )}
-        <p className="text-xs text-[#6b6d64]">
-          Pagos recibidos: {historyQuery.isLoading ? "…" : paymentCount}
-        </p>
+      </section>
+
+      <section className={cardClass}>
+        <h2 className={sectionTitleClass}>Tus ventas</h2>
+        {historyQuery.isLoading ? (
+          <p className="text-xs text-[#6b6d64]">Cargando tu historial…</p>
+        ) : payments.length === 0 ? (
+          <p className="text-xs text-[#6b6d64]">Todavía no tienes ventas registradas.</p>
+        ) : (
+          <>
+            <div className={highlightBoxClass}>
+              <p className="text-xs text-[#6b6d64]">Total recibido (últimos {payments.length} pagos)</p>
+              <p className="text-2xl font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+                {formatSoles(totalReceivedEth)}
+              </p>
+            </div>
+            <ul className="flex flex-col divide-y divide-black/[0.06] overflow-hidden rounded-xl border border-black/10">
+              {payments.map((p, i) => (
+                <li key={i} className="flex items-center justify-between gap-3 bg-white px-3 py-2 text-sm">
+                  <span className="text-[#6b6d64]">{formatPaymentDate(p.timestamp)}</span>
+                  <span className="font-medium text-[#0a0a0b]">{formatSoles(p.amountEth)}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-[#6b6d64]">
+              Se muestran los últimos 12 pagos — es el historial que guarda el contrato para calcular tu fiado.
+            </p>
+          </>
+        )}
       </section>
 
       <section className={cardClass}>
@@ -494,6 +632,66 @@ export function BodegaOwnerPanel() {
           </div>
         )}
       </section>
+
+      {isBeneficioAdmin && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Panel de administrador — Beneficios sociales</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Solo vos ves esta sección: tu cuenta es la autorizada para emitir BeneficioToken
+            (programas como Vaso de Leche o Pensión 65). Cada sol emitido solo se puede gastar
+            en una bodega registrada — no se puede revender ni cambiar por efectivo.
+          </p>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="beneficiaryCode" className="text-sm font-medium text-[#0a0a0b]">
+              Código del beneficiario
+            </label>
+            <input
+              id="beneficiaryCode"
+              inputMode="numeric"
+              value={beneficiaryCodeInput}
+              onChange={(e) => handleBeneficiaryCodeChange(e.target.value)}
+              placeholder="Su código de 6 dígitos"
+              className={inputClass}
+            />
+            {isResolvingBeneficiary && <p className="text-xs text-[#6b6d64]">Buscando...</p>}
+            {beneficiaryNotFound && <p className="text-xs text-red-500">No encontramos ese código.</p>}
+
+            {beneficiaryAddress && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-[#6b6d64]">S/</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="1"
+                    value={issueAmountSoles}
+                    onChange={(e) => setIssueAmountSoles(e.target.value)}
+                    className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-[#6b6d64]">Vence en (días)</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    step="1"
+                    value={issueDurationDays}
+                    onChange={(e) => setIssueDurationDays(e.target.value)}
+                    className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                  />
+                </div>
+                <button onClick={handleIssue} disabled={isIssuing} className={primaryButtonClass} style={primaryButtonStyle}>
+                  {isIssuing ? "Emitiendo..." : "Emitir beneficio"}
+                </button>
+              </>
+            )}
+            {issueError && <p className="text-xs text-red-500">{issueError}</p>}
+            {issueConfirmed && <p className="text-xs text-green-600">¡Listo! Ya se emitió el beneficio ✓</p>}
+          </div>
+        </section>
+      )}
 
       {TELEGRAM_BOT_USERNAME && (
         <section className={cardClass}>
