@@ -61,12 +61,19 @@ contract PuntosPaymaster is BasePaymaster {
         return (abi.encode(account, true), 0);
     }
 
-    function _postOp(PostOpMode, bytes calldata context, uint256 actualGasCost, uint256) internal override {
+    function _postOp(PostOpMode mode, bytes calldata context, uint256 actualGasCost, uint256) internal override {
         (address account, bool chargeable) = abi.decode(context, (address, bool));
 
         if (!chargeable) {
-            hasBootstrapped[account] = true;
-            emit FreeBootstrapUsed(account);
+            // Only burn the one free bootstrap if the account's own call actually succeeded.
+            // If it reverted (wrong bodega code, insufficient funds, whatever), the account
+            // never got any real use out of its "free" transaction and never earned any
+            // PUNTOS from it either — marking it bootstrapped anyway would permanently lock
+            // that account out (no free tx left, 0 PUNTOS balance to pay for the next one).
+            if (mode == PostOpMode.opSucceeded) {
+                hasBootstrapped[account] = true;
+                emit FreeBootstrapUsed(account);
+            }
             return;
         }
 

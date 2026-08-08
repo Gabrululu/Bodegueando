@@ -100,6 +100,30 @@ contract PuntosPaymasterTest is Test {
         assertEq(puntos.balanceOf(address(paymaster)), 0.0003 ether);
     }
 
+    function test_FailedFirstUserOp_DoesNotBurnBootstrap() public {
+        PackedUserOperation memory userOp = _emptyUserOp(account);
+
+        vm.prank(address(entryPoint));
+        (bytes memory context,) = paymaster.validatePaymasterUserOp(userOp, bytes32(0), 1 ether);
+
+        // The account's own call reverted (e.g. wrong bodega code) — opReverted, not
+        // opSucceeded. This must NOT count as "used their free transaction".
+        vm.prank(address(entryPoint));
+        paymaster.postOp(IPaymaster.PostOpMode.opReverted, context, 0.001 ether, 1 gwei);
+
+        assertFalse(paymaster.hasBootstrapped(account), "a reverted first UserOp must not burn the free bootstrap");
+
+        // The account can still get a free ride on its real first successful UserOp.
+        vm.prank(address(entryPoint));
+        (bytes memory context2, uint256 validationData) =
+            paymaster.validatePaymasterUserOp(userOp, bytes32(0), 1 ether);
+        assertEq(validationData, 0);
+
+        vm.prank(address(entryPoint));
+        paymaster.postOp(IPaymaster.PostOpMode.opSucceeded, context2, 0.001 ether, 1 gwei);
+        assertTrue(paymaster.hasBootstrapped(account));
+    }
+
     function test_RevertWhen_InsufficientPuntosBalance() public {
         PackedUserOperation memory userOp = _emptyUserOp(account);
         vm.startPrank(address(entryPoint));

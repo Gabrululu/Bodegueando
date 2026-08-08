@@ -38,7 +38,7 @@ bodegueando/
 | **FiadoScoring** (Stylus/Rust) | `0x9C6868b6c8521854e65C622a848A2C0C9873b6Df` | [ver / verificado](https://sepolia.arbiscan.io/address/0x9C6868b6c8521854e65C622a848A2C0C9873b6Df) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
 | **PaymentRouter** | `0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd#code) |
-| **PuntosPaymaster** | `0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a` | [ver código verificado](https://sepolia.arbiscan.io/address/0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a#code) |
+| **PuntosPaymaster** | `0x138572e9A1c858D2759e60f46586D36e974FBcEd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x138572e9A1c858D2759e60f46586D36e974FBcEd#code) |
 | **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
 
 `FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
@@ -61,12 +61,21 @@ abajo para el detalle de cómo se calculó esa dirección y el hash de la transa
 
 `PaymentRouter` se redesplegó una tercera vez el mismo día para arreglar un bug real
 descubierto en vivo: una bodega se queda sin PUNTOS para pagar gas después de su primera
-transacción gratis (ver "PUNTOS de bienvenida para bodegas" más abajo). `PuntosToken`,
-`FiadoScoring` y `PuntosPaymaster` no cambiaron — se reusaron tal cual, con el mismo relinkeo
-de minter que en el redeploy anterior. `BeneficioToken.setBodegaRegistry` también necesita
-apuntar al `PaymentRouter` nuevo; como su `owner` ya no es la cuenta deployer (ver arriba), esa
-actualización quedó como una acción de un clic en el panel de administrador en vez de un
-`cast send` — solo quien tenga esa sesión la puede autorizar.
+transacción gratis (ver "Login sin wallet..." más abajo, sección "Bug real encontrado en
+vivo"). `PuntosToken`, `FiadoScoring` y `PuntosPaymaster` no cambiaron en ese redeploy — se
+reusaron tal cual, con el mismo relinkeo de minter que en el redeploy anterior.
+`BeneficioToken.setBodegaRegistry` también necesita apuntar al `PaymentRouter` nuevo; como su
+`owner` ya no es la cuenta deployer (ver arriba), esa actualización quedó como una acción de
+un clic en el panel de administrador en vez de un `cast send` — solo quien tenga esa sesión la
+puede autorizar.
+
+`PuntosPaymaster` se redesplegó ese mismo día, aparte, por un segundo bug relacionado pero
+distinto: `_postOp` marcaba una cuenta como "ya usó su transacción gratis" sin fijarse si esa
+transacción había tenido éxito o revertido — así que el primer intento fallido de cualquiera
+(no solo bodegas; cualquier comprador cuyo primer pago fallara por el motivo que sea) quemaba
+igual el bootstrap y la dejaba sin PUNTOS para reintentar. Ver "Bug real encontrado en vivo"
+en la misma sección de abajo para el detalle. Reusa el mismo `PuntosToken` de siempre; el
+depósito de gas en el EntryPoint es nuevo (0.02 ETH), el del paymaster viejo queda huérfano.
 
 `PuntosToken`, `PaymentRouter`, `PuntosPaymaster` y `BeneficioToken` están verificados con código fuente Solidity legible en
 Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
@@ -449,6 +458,29 @@ bienvenida) antes de dar el fix por confirmado, no solo por los tests unitarios 
 `test_RegisterSelf_MintsBootstrapPuntos` / `test_RegisterBodega_MintsBootstrapPuntos` en
 `test/PaymentRouter.t.sol` para la cobertura unitaria.
 
+**Segundo bug relacionado, en `PuntosPaymaster._postOp`: el bootstrap se quemaba aunque la
+transacción hubiera fallado.** El primer parámetro de `_postOp` es un `PostOpMode`
+(`opSucceeded` / `opReverted` / `postOpReverted`) que dice si la llamada de la cuenta salió
+bien o no — el contrato original lo recibía sin siquiera nombrarlo, ignorándolo por completo,
+y marcaba `hasBootstrapped[cuenta] = true` sin importar el resultado. Esto significa que el
+*primer* intento fallido de cualquiera (una bodega con un código mal escrito, un comprador que
+se equivocó de monto, cualquier revert dentro del contrato) igual consumía la única
+transacción gratis — dejando a esa cuenta con 0 PUNTOS y sin ninguna forma de pagar la
+siguiente. No es un bug exclusivo de bodegas: afecta a cualquier cuenta cuya primera
+transacción patrocinada haya revertido, por el motivo que sea.
+
+**Fix:** `_postOp` ahora solo marca el bootstrap como usado cuando `mode == PostOpMode.opSucceeded`.
+Un primer intento que revierte no cuenta — la cuenta sigue teniendo su transacción gratis
+disponible para cuando lo intente de nuevo (correctamente esta vez). Cubierto por
+`test_FailedFirstUserOp_DoesNotBurnBootstrap` en `test/PuntosPaymaster.t.sol`: valida
+`postOp` con `PostOpMode.opReverted` directo, confirma que `hasBootstrapped` sigue en `false`,
+y que la cuenta todavía puede tener un primer `opSucceeded` gratis después. Verificado también
+en vivo contra el paymaster redesplegado, con una cuenta real haciendo su primera transacción
+exitosa y confirmando que `hasBootstrapped` pasa a `true` recién ahí. Como el mapeo
+`hasBootstrapped` vive en el contrato del paymaster, redesplegarlo también "desatascó" de
+paso a cualquier cuenta que ya hubiera quedado atrapada por este bug con el paymaster
+anterior — sin necesitar identificarlas una por una.
+
 Corrida real de punta a punta contra los contratos desplegados arriba (script standalone con
 `permissionless.js` + el bundler de Pimlico, sin pasar por el navegador, para aislar la
 infraestructura antes de probarla con Privy real):
@@ -628,7 +660,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Montos en soles (PEN) en vez de ETH, con tasa de cambio real | ✅ Funcional — conversión de display, ver "Atajos" |
 | Registro self-service de bodegas (`PaymentRouter.registerSelf`) | ✅ Probado en vivo — cualquiera se registra desde la web, sin admin |
 | Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
-| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS. Incluye el fix de PUNTOS de bienvenida para bodegas (sin esto, quedaban bloqueadas tras registrarse), ver "Login sin wallet..." |
+| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS. Incluye dos fixes encontrados en vivo: PUNTOS de bienvenida para bodegas, y que un primer intento fallido ya no quema la transacción gratis, ver "Login sin wallet..." |
 | Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
 | Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
 | `InvoiceEscrow` (fiado con garantía) | 🔜 Roadmap, opcional |
