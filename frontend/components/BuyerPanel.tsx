@@ -113,6 +113,16 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     }
   }
 
+  const isBodegaQuery = useReadContract({
+    address: paymentRouterAddress,
+    abi: paymentRouterAbi,
+    functionName: "isBodega",
+    args: bodegaAddress ? [bodegaAddress] : undefined,
+    query: { enabled: Boolean(bodegaAddress && paymentRouterAddress) },
+  });
+  const isRealBodega = isBodegaQuery.data === true;
+  const codeIsNotABodega = Boolean(bodegaAddress) && !isBodegaQuery.isLoading && !isRealBodega;
+
   const fiadoEnabledQuery = useReadContract({
     address: fiadoScoringAddress,
     abi: fiadoScoringAbi,
@@ -351,13 +361,11 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   const aiAdjusted = Boolean((aiInfoQuery.data as [boolean, bigint] | undefined)?.[0]);
   const confianza = confianzaLabel(score);
 
-  const payDisabledReason = !bodegaAddress
-    ? "Escribe el código de la bodega para poder pagar."
-    : !isConnected
-      ? isAccountLoading
-        ? "Preparando tu cuenta…"
-        : "Ingresa arriba para poder pagar."
-      : null;
+  const payDisabledReason = !isConnected
+    ? isAccountLoading
+      ? "Preparando tu cuenta…"
+      : "Ingresa arriba para poder pagar."
+    : null;
 
   return (
     <div className="flex w-full max-w-md flex-col gap-8 text-left">
@@ -375,9 +383,15 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
         />
         {isResolvingCode && <p className="text-xs text-[#6b6d64]">Buscando...</p>}
         {codeNotFound && <p className="text-xs text-red-500">No encontramos esa bodega, revisa el código.</p>}
+        {codeIsNotABodega && (
+          <p className="text-xs text-red-500">
+            Ese código no corresponde a una bodega — revisa que sea el código que te mostró el
+            cartel o QR de la tienda, no el tuyo.
+          </p>
+        )}
       </div>
 
-      {bodegaAddress && fiadoEnabled && (
+      {bodegaAddress && isRealBodega && fiadoEnabled && (
         <div className={highlightBoxClass}>
           <div>
             <p className="text-xs text-[#6b6d64]">Fiado disponible en esta bodega</p>
@@ -421,7 +435,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
           )}
         </div>
       )}
-      {bodegaAddress && !fiadoEnabled && !fiadoEnabledQuery.isLoading && (
+      {bodegaAddress && isRealBodega && !fiadoEnabled && !fiadoEnabledQuery.isLoading && (
         <p className="text-xs text-[#8f9189]">Esta bodega no ofrece fiado por ahora.</p>
       )}
 
@@ -442,7 +456,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
             Solo se puede gastar en una bodega registrada — no se puede cambiar por efectivo ni
             mandarlo a otra persona.
           </p>
-          {bodegaAddress ? (
+          {bodegaAddress && isRealBodega ? (
             <>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-[#6b6d64]">S/</span>
@@ -468,40 +482,45 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
         </div>
       )}
 
-      <section className={cardClass}>
-        <h2 className={sectionTitleClass}>Pagar en la bodega</h2>
+      {bodegaAddress && isRealBodega && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Pagar en la bodega</h2>
 
-        <div className="flex flex-col gap-1">
-          <label htmlFor="amount" className="text-sm font-medium text-[#0a0a0b]">
-            ¿Cuánto vas a pagar?
-          </label>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-[#6b6d64]">S/</span>
-            <input
-              id="amount"
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.5"
-              value={amountSoles}
-              onChange={(e) => setAmountSoles(e.target.value)}
-              className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
-            />
+          <div className="flex flex-col gap-1">
+            <label htmlFor="amount" className="text-sm font-medium text-[#0a0a0b]">
+              ¿Cuánto vas a pagar?
+            </label>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-[#6b6d64]">S/</span>
+              <input
+                id="amount"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.5"
+                value={amountSoles}
+                onChange={(e) => setAmountSoles(e.target.value)}
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+              />
+            </div>
           </div>
-        </div>
 
-        <button
-          onClick={handlePay}
-          disabled={!isConnected || !bodegaAddress || isPaySubmitting}
-          className={primaryButtonClass}
-          style={primaryButtonStyle}
-        >
-          {isPaySubmitting ? "Pagando..." : "Pagar"}
-        </button>
-        {payDisabledReason && <p className="text-xs text-[#6b6d64]">{payDisabledReason}</p>}
-        {payError && <p className="text-xs text-red-500">{payError}</p>}
-        {isPayConfirmed && <p className="text-xs text-green-600">¡Listo! Tu pago se registró ✓</p>}
-      </section>
+          <button
+            onClick={handlePay}
+            disabled={!isConnected || isPaySubmitting}
+            className={primaryButtonClass}
+            style={primaryButtonStyle}
+          >
+            {isPaySubmitting ? "Pagando..." : "Pagar"}
+          </button>
+          {payDisabledReason && <p className="text-xs text-[#6b6d64]">{payDisabledReason}</p>}
+          {payError && <p className="text-xs text-red-500">{payError}</p>}
+          {isPayConfirmed && <p className="text-xs text-green-600">¡Listo! Tu pago se registró ✓</p>}
+        </section>
+      )}
+      {!isRealBodega && !bodegaAddress && (
+        <p className="text-xs text-[#8f9189]">Escribe arriba el código de la bodega para poder pagar.</p>
+      )}
 
       {isConnected && (
         <section className={cardClass}>
