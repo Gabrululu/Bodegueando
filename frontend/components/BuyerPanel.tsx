@@ -273,9 +273,11 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       .then((data) => {
         if (data.funded) {
           setFaucetMessage(`🎁 Te regalamos ${formatSoles(Number(data.amountEth))} de saldo de prueba para que puedas probar la app.`);
+        } else if (data.reason === "faucet_error") {
+          console.error("[faucet] no se pudo fondear la cuenta", address);
         }
       })
-      .catch(() => {});
+      .catch((err) => console.error("[faucet] request failed", err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address]);
 

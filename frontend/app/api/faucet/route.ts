@@ -42,23 +42,28 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ funded: false, reason: "already_funded" });
   }
 
-  const client = publicClient();
-  const balance = await client.getBalance({ address: address as Address });
-  if (balance >= MIN_BALANCE_TO_SKIP) {
-    alreadyFunded[key] = { txHash: "", at: Date.now() };
+  try {
+    const client = publicClient();
+    const balance = await client.getBalance({ address: address as Address });
+    if (balance >= MIN_BALANCE_TO_SKIP) {
+      alreadyFunded[key] = { txHash: "", at: Date.now() };
+      await writeJsonStore(STORE_NAME, alreadyFunded);
+      return NextResponse.json({ funded: false, reason: "already_has_balance" });
+    }
+
+    const funder = privateKeyToAccount(faucetPrivateKey);
+    const walletClient = createWalletClient({ account: funder, chain: arbitrumSepolia, transport: http(rpcUrl) });
+    const txHash = await walletClient.sendTransaction({
+      to: address as Address,
+      value: parseEther(faucetAmountEth),
+    });
+
+    alreadyFunded[key] = { txHash, at: Date.now() };
     await writeJsonStore(STORE_NAME, alreadyFunded);
-    return NextResponse.json({ funded: false, reason: "already_has_balance" });
+
+    return NextResponse.json({ funded: true, amountEth: faucetAmountEth, txHash });
+  } catch (err) {
+    console.error("[faucet] failed to fund", key, err);
+    return NextResponse.json({ funded: false, reason: "faucet_error" }, { status: 500 });
   }
-
-  const funder = privateKeyToAccount(faucetPrivateKey);
-  const walletClient = createWalletClient({ account: funder, chain: arbitrumSepolia, transport: http(rpcUrl) });
-  const txHash = await walletClient.sendTransaction({
-    to: address as Address,
-    value: parseEther(faucetAmountEth),
-  });
-
-  alreadyFunded[key] = { txHash, at: Date.now() };
-  await writeJsonStore(STORE_NAME, alreadyFunded);
-
-  return NextResponse.json({ funded: true, amountEth: faucetAmountEth, txHash });
 }
