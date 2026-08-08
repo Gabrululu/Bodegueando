@@ -238,6 +238,13 @@ límite sigue siendo libre sin importar el heurístico.
 
 ### `BeneficioToken.sol` — PoC de programas sociales on-chain (Vaso de Leche, Qali Warma, Pensión 65)
 
+La razón de que esto tenga sentido en este proyecto específicamente, no como un feature
+genérico pegado encima: ningún supermercado ni farmacia de cadena llega a todos los barrios
+donde sí hay una bodega — eso las convierte, sin que nadie lo haya diseñado así, en la red de
+última milla más grande y más cercana del país. `BeneficioToken` aprovecha esa presencia real
+para que un programa social llegue directo a quien lo necesita, gastable solo en la bodega de
+su barrio, sin intermediarios que se queden con una parte en el camino.
+
 A diferencia de `PuntosToken` (libre, transferible entre cualquiera), `BeneficioToken` es un
 ERC-20 restringido: un beneficiario solo puede gastarlo transfiriéndolo a una bodega ya
 registrada en `PaymentRouter` (nunca revenderlo a otra persona ni cambiarlo por efectivo), y
@@ -415,6 +422,36 @@ funciones pasaron de sync a `async`); las rutas API que las llaman ya eran `asyn
 solo hizo falta agregar los `await` correspondientes. Verificado localmente: el
 round-trip completo (generar código → resolverlo) sigue funcionando igual por el camino de
 fallback a archivo, sin credenciales de Upstash configuradas.
+
+### Faucet automático de saldo de prueba para la demo
+
+`PaymentRouter.receivePayment` cobra en ETH de testnet (el stand-in de eSol — ver "Atajos
+conscientes de hackathon"), y a diferencia del gas (que paga `PuntosPaymaster`), el *monto del
+pago* tiene que salir del propio saldo del comprador. Una cuenta nueva arranca en 0 ETH — antes
+de esto, la única forma de probar un pago real era que un operador le mandara testnet ETH a
+mano a cada cuenta de prueba (`cast send`), algo que no escala para que gente ajena pruebe la
+demo por su cuenta.
+
+`app/api/faucet/route.ts` resuelve esto: apenas `BuyerPanel` detecta una cuenta conectada,
+le pide un pequeño regalo de saldo (`FAUCET_AMOUNT_ETH`, default 0.005 ETH) — una transacción
+real de testnet ETH, no simulada. Protecciones contra abuso:
+
+- **Una sola vez por dirección**, registrado en `lib/kv.ts` (mismo store que
+  bodega-codes/telegram-links) apenas se manda la transacción — no importa si la cuenta gasta
+  el saldo, no vuelve a pedir.
+- **Chequea el balance on-chain actual** antes de mandar nada — si la cuenta ya tiene fondos
+  (por ejemplo, fondeada a mano antes de que existiera esta ruta), no duplica el regalo.
+- Sin `FAUCET_PRIVATE_KEY` configurada, la ruta simplemente no hace nada (`funded: false`) —
+  no rompe el flujo de pago si no está configurada, solo no regala saldo.
+
+Solo aplica a compradores (`BuyerPanel`) — una bodega nunca necesita tener ETH propio, ya que
+`registerSelf`/`setFiadoEnabled`/`extendFiado` no mandan valor, solo gas (que ya cubre
+`PuntosPaymaster`). Probado en vivo: primera llamada manda una transacción real y confirma el
+balance nuevo on-chain; la segunda llamada para la misma dirección no manda nada.
+
+Igual que el depósito de gas del paymaster, esta cuenta fondeadora necesita reposición manual
+ocasional — es un atajo de demo, no una rampa fiat real (ver "Rampas eSol ↔ PEN reales" en la
+tabla de roadmap más abajo para la distinción con una integración real de Yape/efectivo).
 
 ### Login sin wallet + registro self-service + gas pagado con PUNTOS (probado en vivo)
 
@@ -653,6 +690,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 | `BeneficioToken` — programas sociales restringidos (Vaso de Leche, Qali Warma, Pensión 65) | ✅ Desplegado, verificado y con ownership transferido a una sesión real logueada (9/9, 26/26 en todo el repo). UI de emisión admin-only en el panel de bodega + UI de canje en el panel de cliente, ambas funcionales — ver "`BeneficioToken.sol`" |
 | Bodeguero/cliente como espacios separados (selector explícito, sin vistas combinadas) | ✅ Funcional — ver "Bodeguero y cliente son dos espacios separados" |
 | Códigos de bodega/cliente y vínculos de Telegram en Upstash Redis (no archivo local) | ✅ Funcional con fallback automático a archivo si no hay credenciales de Upstash — cierra el riesgo real del filesystem efímero de Vercel, ver "Storage: Upstash Redis en producción" |
+| Faucet automático de saldo de prueba para compradores nuevos | ✅ Funcional — una vez por cuenta, probado en vivo con transacción real, ver "Faucet automático de saldo de prueba" |
 | Ajuste de fiado con IA (Claude, en español, escribe on-chain) | ✅ Probado en vivo end-to-end |
 | Dashboard web (leer score/límite, pagar, pedir recálculo IA) | ✅ Funcional |
 | Vistas separadas bodeguero/comprador, detectadas por rol on-chain | ✅ Funcional (`isBodega` en `PaymentRouter`) |
@@ -666,6 +704,8 @@ marca qué parte de esto ya está construido y probado en testnet.
 | `InvoiceEscrow` (fiado con garantía) | 🔜 Roadmap, opcional |
 | Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
 | `ePEN` (token propio, redimible 1:1 por soles reales) | 🔜 Roadmap — hoy la app solo convierte el monto a soles para mostrarlo (ver "Atajos"); un `ePEN` real necesitaría un emisor regulado que respalde cada token con soles en custodia (como una stablecoin bancaria), que es un problema de compliance y de rampas fiat, no solo de contrato. Construir el contrato ERC-20 en sí es trivial; lo que falta es esa pieza, y no vale la pena simularla con una paridad falsa que parezca más sólida de lo que es |
+| Score crediticio del bodeguero con Zero-Knowledge (no del cliente — del propio negocio) | 🔜 Roadmap — hoy el historial on-chain demuestra si los *clientes* de una bodega pagan bien; falta la pieza inversa, que el bodeguero use ese mismo historial de ventas para probarle su propia solidez a un banco/proveedor sin entregarle el detalle de sus ventas. Necesita una prueba ZK sobre los datos ya on-chain (ej. "mis ventas superan X" sin revelar la cifra exacta) — es la pieza que falta para que el historial sea útil también *hacia afuera*, no solo hacia sus propios clientes |
+| Compras conjuntas entre bodegas (pedidos grupales cuando el distribuidor no llega) | 🔜 Roadmap — bodegas alejadas pierden ventas porque el distribuidor no llega hasta ellas o el pedido mínimo es mayor a lo que una sola bodega necesita; coordinar la demanda de varias bodegas cercanas para alcanzar ese mínimo es un problema de coordinación (y potencialmente de escrow) que hoy no está resuelto |
 
 ### Flujo de demo objetivo (jurado)
 

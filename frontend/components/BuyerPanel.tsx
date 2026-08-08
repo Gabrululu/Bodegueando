@@ -65,6 +65,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   const [isRedeemSubmitting, setIsRedeemSubmitting] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [isRedeemConfirmed, setIsRedeemConfirmed] = useState(false);
+  const [faucetMessage, setFaucetMessage] = useState<string | null>(null);
 
   const contractsConfigured = Boolean(fiadoScoringAddress && paymentRouterAddress);
 
@@ -261,6 +262,23 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       .catch(() => setMyCode(null));
   }, [address]);
 
+  useEffect(() => {
+    if (!address) return;
+    fetch("/api/faucet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.funded) {
+          setFaucetMessage(`🎁 Te regalamos ${formatSoles(Number(data.amountEth))} de saldo de prueba para que puedas probar la app.`);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address]);
+
   async function handlePay() {
     if (!bodegaAddress || !paymentRouterAddress || !smartAccountClient || !address) return;
     setIsPaySubmitting(true);
@@ -369,6 +387,11 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
 
   return (
     <div className="flex w-full max-w-md flex-col gap-8 text-left">
+      {faucetMessage && (
+        <p className="rounded-xl border border-black/5 bg-[#c9e26514] px-4 py-3 text-sm text-[#0a0a0b]">
+          {faucetMessage}
+        </p>
+      )}
       <div className="flex flex-col gap-1">
         <label htmlFor="bodega" className="text-sm font-medium text-[#0a0a0b]">
           Código de la bodega
