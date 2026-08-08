@@ -37,6 +37,15 @@ contract PaymentRouter is Ownable {
         emit BodegaRegistered(bodega);
     }
 
+    /// @notice Self-service registration: any address can register itself as a bodega, no
+    /// admin approval needed. Safe because isBodega only gates who can be a *recipient* of
+    /// receivePayment (a payment the payer themselves chose to send) — it grants no minting
+    /// rights and doesn't affect FiadoScoring's own msg.sender-gated fiado toggle.
+    function registerSelf() external {
+        isBodega[msg.sender] = true;
+        emit BodegaRegistered(msg.sender);
+    }
+
     function setFiadoScoring(IFiadoScoring _fiadoScoring) external onlyOwner {
         fiadoScoring = _fiadoScoring;
         emit FiadoScoringUpdated(address(_fiadoScoring));

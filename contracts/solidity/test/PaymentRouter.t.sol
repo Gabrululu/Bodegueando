@@ -54,6 +54,22 @@ contract PaymentRouterTest is Test {
         router.receivePayment{value: 0}(bodega);
     }
 
+    function test_RegisterSelf_AnyAddressCanRegisterItself() public {
+        address newBodega = makeAddr("newBodega");
+        assertFalse(router.isBodega(newBodega));
+
+        vm.prank(newBodega);
+        router.registerSelf();
+
+        assertTrue(router.isBodega(newBodega));
+    }
+
+    function test_RevertWhen_NonOwnerCallsRegisterBodega() public {
+        vm.prank(payer);
+        vm.expectRevert();
+        router.registerBodega(makeAddr("someoneElse"));
+    }
+
     function test_OnlyOwnerCanSetCashbackBps() public {
         vm.prank(payer);
         vm.expectRevert();

@@ -32,9 +32,10 @@ bodegueando/
 |---|---|---|
 | **FiadoScoring** (Stylus/Rust) | `0x244CF96dDfa77c103B569EEe2Ff33f61641e3e5e` | [ver / verificado](https://sepolia.arbiscan.io/address/0x244CF96dDfa77c103B569EEe2Ff33f61641e3e5e) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
-| **PaymentRouter** | `0x7007508b1420e719D7a7A69B98765F60c7Aae759` | [ver código verificado](https://sepolia.arbiscan.io/address/0x7007508b1420e719D7a7A69B98765F60c7Aae759#code) |
+| **PaymentRouter** | `0xE0780148AAB2497E745d4cCA5Ca4a481f345431b` | [ver código verificado](https://sepolia.arbiscan.io/address/0xE0780148AAB2497E745d4cCA5Ca4a481f345431b#code) |
+| **PuntosPaymaster** | `0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a` | [ver código verificado](https://sepolia.arbiscan.io/address/0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a#code) |
 
-`PuntosToken` y `PaymentRouter` están verificados con código fuente Solidity legible en
+`PuntosToken`, `PaymentRouter` y `PuntosPaymaster` están verificados con código fuente Solidity legible en
 Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
 `cargo stylus verify` — no muestra código fuente como Etherscan, pero prueba que el
 bytecode desplegado corresponde a un build reproducible de `src/lib.rs` dentro del
@@ -50,10 +51,12 @@ Dos vistas separadas, no una pantalla única que muestra u oculta secciones:
   clientes, el interruptor de fiado (`setFiadoEnabled`), y un botón para recalcular
   su fiado con IA (`/api/fiado-score`) — esto ya no lo puede disparar un comprador.
 
-`app/page.tsx` detecta el rol solo: al conectar la wallet, lee
-`PaymentRouter.isBodega(direcciónConectada)` y muestra el panel que corresponde,
-sin preguntar nada. Hay un link chico "Ver como comprador / Ver como bodeguero" para
-forzar la vista durante la demo sin necesitar dos wallets distintas.
+`app/page.tsx` detecta el rol solo: después del login (ver "Login sin wallet" abajo), lee
+`PaymentRouter.isBodega(direcciónDeLaSmartAccount)` y muestra el panel que corresponde. Por
+defecto todos entran como comprador (fricción cero para pagar); un link chico "¿Tienes una
+bodega? Regístrala aquí" dispara `registerSelf()` y recién ahí cambia al panel de bodeguero —
+no hay una pantalla de elección forzada ni un selector manual, cada persona usa su propia
+cuenta real (teléfono/correo).
 
 **El fiado es opt-in por bodega, no automático.** En la vida real una bodega no
 siempre fía — es decisión del dueño ("hoy no se fía, mañana sí"). `fiado_enabled`
@@ -125,6 +128,54 @@ Corrida real de punta a punta contra los contratos desplegados arriba:
    mensaje de Telegram recibido al instante, ahora en soles (*"💰 Te pagaron S/ X.XX
    en Bodegueando."*).
 
+### Login sin wallet + registro self-service + gas pagado con PUNTOS (probado en vivo)
+
+La meta del producto es que nadie tenga que saber qué es una wallet. Esto ya funciona de
+punta a punta:
+
+- **Login (`components/Login.tsx`, Privy):** entras con tu teléfono o correo (código OTP),
+  nunca con "conecta tu wallet". Privy crea una wallet embebida en el primer login, invisible
+  para el usuario — solo ve su correo/teléfono en pantalla.
+- **Registro self-service de bodegas (`PaymentRouter.registerSelf`):** cualquiera puede
+  registrarse como bodega desde la web, sin que un admin lo apruebe (ver "Análisis" en el
+  código del contrato: `isBodega` solo decide quién puede *recibir* un pago que el comprador
+  ya eligió mandar — no hay nada que abusar).
+- **Gas pagado con PUNTOS, no con ETH (`PuntosPaymaster.sol`, ERC-4337):** cada persona tiene
+  una *smart account* (no una wallet normal) cuya llave es la wallet embebida de Privy. La
+  primera transacción de cada cuenta la patrocina la app gratis (bootstrap); de ahí en
+  adelante, el gas de cada transacción se cobra directamente en PUNTOS del propio saldo del
+  usuario — sin oráculo de precio, porque PUNTOS ya está denominado en la misma unidad que el
+  ETH del pago original (`cashback = monto × cashbackBps`, en wei). El usuario nunca ve "gas"
+  ni firma un popup de MetaMask; solo ve un botón que dice "Registrar" o "Pagar".
+
+Corrida real de punta a punta contra los contratos desplegados arriba (script standalone con
+`permissionless.js` + el bundler de Pimlico, sin pasar por el navegador, para aislar la
+infraestructura antes de probarla con Privy real):
+
+1. Smart account nueva (owner: una wallet local descartable) manda `registerSelf()` como su
+   primera UserOperation.
+2. `PuntosPaymaster` la patrocina gratis (evento `FreeBootstrapUsed` emitido) — el usuario no
+   pagó nada de gas.
+3. `PaymentRouter` emite `BodegaRegistered` y `isBodega(smartAccount)` pasa a `true` on-chain.
+
+Después de esto se repitió el flujo completo en el navegador con un login real de Privy:
+entrar por teléfono/correo → caer directo en la vista de comprador → tocar "¿Tienes una
+bodega? Regístrala aquí" (sin popup de wallet, se siente instantáneo) → pasar a la vista de
+bodeguero, con un QR nuevo para cobrar (ver siguiente sección) — confirmado en vivo.
+
+### Código de la bodega: QR + número corto, nunca una dirección (probado en vivo)
+
+`BodegaOwnerPanel.tsx` ya no muestra una dirección `0x...` para que el cliente la copie —
+genera un código permanente de 6 dígitos (`lib/bodegaCodes.ts`, guardado en
+`frontend/.data/bodega-codes.json`, sin expirar — a diferencia del código de Telegram, este
+tiene que seguir funcionando meses después, impreso en un cartel) y lo muestra como QR
+(`qrcode.react`) que codifica `https://<dominio>/pagar/<código>`.
+
+El cliente escanea con la cámara nativa del celular (sin librería de escaneo: la URL abre
+directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y precarga
+`BuyerPanel`) o escribe el código a mano como respaldo. Ninguno de los dos paneles muestra un
+`0x...` en ningún lado.
+
 ## Atajos conscientes de hackathon
 
 - **eSol → ETH nativo de testnet.** `PaymentRouter.receivePayment` usa `msg.value`
@@ -134,9 +185,25 @@ Corrida real de punta a punta contra los contratos desplegados arriba:
   transacción `updateScoreFromAi` con una clave privada de testnet guardada en
   `ORACLE_PRIVATE_KEY` (variable de entorno del servidor Next.js). En producción esto
   debería ser un servicio de firma dedicado, no una clave en el proceso del backend.
-- **Passkey / Account Abstraction (ERC-4337)**: solo un stub (`components/PasskeyLogin.tsx`)
-  con `TODO`s — el login real hoy es una wallet inyectada normal (wagmi `injected()`).
-  Deprioritizado explícitamente para dejar el flujo de pagos y scoring demostrable primero.
+- **Cuenta inteligente sin passkey todavía.** El login es Privy (teléfono/correo) y la smart
+  account usa esa wallet embebida como firmante — la meta de producto era login con passkey
+  (WebAuthn) como llave, pero eso es un paso más de integración que no cambia la arquitectura
+  de fondo (Privy también soporta passkeys); se priorizó tener el flujo completo de AA + gas
+  en PUNTOS funcionando primero.
+- **`SimpleAccount` (referencia de eth-infinitism), no Safe ni Kernel.** Es la implementación
+  que usa la guía oficial de Pimlico para signers de Privy — menor superficie de riesgo que
+  evaluar otra librería de smart accounts contra el reloj de la hackathon.
+- **Pimlico solo como bundler, paymaster propio.** `PuntosPaymaster.sol` es un contrato
+  nuestro (no el paymaster ERC-20 hosteado de Pimlico) porque PUNTOS es un token propio sin
+  precio de mercado — Pimlico solo transmite las UserOperations al EntryPoint, toda la lógica
+  de "gratis la primera vez, después se cobra en PUNTOS" vive en nuestro contrato.
+- **El depósito de gas del paymaster se repone a mano.** `PuntosPaymaster` necesita ETH real
+  depositado en el EntryPoint para poder patrocinar transacciones (`deposit()` / `cast send`);
+  no hay una ruta automática que lo recargue sola — es responsabilidad de quien opera la app,
+  documentado así a propósito en vez de simular una automatización que no existe.
+- **El QR de la bodega necesita una URL real, no localhost.** `app/pagar/[code]/page.tsx` solo
+  se puede escanear con la cámara del celular si la app está desplegada (Vercel u otro) —
+  en `localhost` sigue funcionando el código de 6 dígitos escrito a mano.
 - **WhatsApp (Twilio)**: solo un stub (`app/api/whatsapp/webhook/route.ts`), prioridad
   más baja del proyecto. WhatsApp Business API requiere aprobación de permisos de
   Meta — por eso **Telegram se implementó primero**: mismo objetivo (avisar al
@@ -165,16 +232,20 @@ marca qué parte de esto ya está construido y probado en testnet.
 
 ### Capas del sistema
 
-1. **Capa de usuario** — app PWA/web para bodeguero y cliente, login con celular +
-   passkey (sin "conecta tu wallet"), QR de cobro en el local, avisos de pago por
-   Telegram (implementado) y WhatsApp (roadmap, pendiente de aprobación de Meta).
-2. **Abstracción de cuenta (ERC-4337)** — smart accounts por usuario creadas en el
-   primer login, bundler + paymaster que patrocina el gas, passkey como llave principal
-   con recuperación por teléfono/email/guardián. El usuario solo ve "saldo" y "puntos".
+1. **Capa de usuario** — app PWA/web para bodeguero y cliente, login con celular/correo
+   (Privy, sin "conecta tu wallet" — implementado), QR de cobro en el local (implementado),
+   avisos de pago por Telegram (implementado) y WhatsApp (roadmap, pendiente de aprobación
+   de Meta).
+2. **Abstracción de cuenta (ERC-4337)** — smart accounts creadas en el primer login,
+   bundler (Pimlico) + paymaster propio (`PuntosPaymaster.sol`) que patrocina la primera
+   transacción gratis y cobra el resto en PUNTOS — implementado y probado en vivo. Login por
+   passkey (WebAuthn) como firmante en vez de la wallet embebida de Privy queda como
+   siguiente paso, no cambia esta arquitectura.
 3. **Contratos on-chain (Arbitrum)** — el ledger de verdad, no una base de datos:
-   - `PaymentRouter.sol` — procesa pagos, cashback y puntos.
-   - `MerchantRegistry.sol` — registro y membresías de bodegas (self-service; hoy solo
-     el owner puede registrar vía `registerBodega`).
+   - `PaymentRouter.sol` — procesa pagos, cashback, puntos y registro self-service de
+     bodegas (`registerSelf`, implementado — `MerchantRegistry.sol` separado ya no hace
+     falta, esa responsabilidad vive en `PaymentRouter`).
+   - `PuntosPaymaster.sol` — paymaster ERC-4337 que cobra el gas en PUNTOS (implementado).
    - `LoyaltyPoints.sol` — token de puntos (implementado como `PuntosToken`, ERC-20).
    - `CreditLineManager.sol` — líneas de fiado, límites y vencimientos (implementado
      como `FiadoScoring` en Stylus, con scoring on-chain **y** ajuste por IA — ya en
@@ -190,19 +261,19 @@ marca qué parte de esto ya está construido y probado en testnet.
 
 ```
 [Cliente / Bodeguero]
-       │
+       │  login con teléfono/correo (Privy)
        ▼
 [App PWA / Web] ←→ [Bot de Telegram] (WhatsApp: roadmap)
+       │  UserOperation (smart account, firmada por la wallet embebida)
+       ▼
+[Bundler (Pimlico) + PuntosPaymaster.sol]
        │
        ▼
-[Backend API + Bundler + Paymaster]
-       │
-       ▼
-[Arbitrum Sepolia / One]
-  - PaymentRouter
-  - MerchantRegistry
-  - LoyaltyPoints
-  - CreditLineManager (FiadoScoring)
+[Arbitrum Sepolia]
+  - PaymentRouter (pagos, cashback, registro self-service de bodegas)
+  - PuntosToken (LoyaltyPoints)
+  - FiadoScoring / CreditLineManager (Stylus)
+  - PuntosPaymaster (paga el gas, cobrado en PUNTOS)
 ```
 
 ### MVP actual — qué está construido vs. roadmap
@@ -217,8 +288,11 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Vistas separadas bodeguero/comprador, detectadas por rol on-chain | ✅ Funcional (`isBodega` en `PaymentRouter`) |
 | Avisos de pago y perfil (`/perfil`) por Telegram, todo en soles | ✅ Funcional — vinculación por código de 6 dígitos + daemon de polling, ver "El bot de Telegram como perfil" |
 | Montos en soles (PEN) en vez de ETH, con tasa de cambio real | ✅ Funcional — conversión de display, ver "Atajos" |
-| Registro self-service de bodegas (`MerchantRegistry`) | 🔜 Roadmap — hoy es owner-only |
-| Login con passkey + smart accounts + paymaster (ERC-4337) | 🔜 Roadmap — el costo de integrar bundler/paymaster/AA es de días, no de horas; se prioriza demostrar el flujo de pagos + Stylus + IA con wallet normal |
+| Registro self-service de bodegas (`PaymentRouter.registerSelf`) | ✅ Probado en vivo — cualquiera se registra desde la web, sin admin |
+| Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
+| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS, ver "Login sin wallet..." |
+| Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
+| Login con passkey (WebAuthn) como firmante de la smart account | 🔜 Roadmap — hoy el firmante es la wallet embebida de Privy (igual de invisible para el usuario), passkey es un cambio de firmante, no de arquitectura |
 | Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
 | `InvoiceEscrow` (fiado con garantía) | 🔜 Roadmap, opcional |
 | Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
@@ -266,6 +340,7 @@ terceros reproducibles, no código del proyecto. Instalarlas primero:
 cd contracts/solidity
 forge install foundry-rs/forge-std --no-git
 forge install OpenZeppelin/openzeppelin-contracts --no-git
+forge install eth-infinitism/account-abstraction@v0.7.0 --no-git
 cd ../..
 ```
 
@@ -280,6 +355,29 @@ Deploy a Arbitrum Sepolia (requiere `contracts/solidity/.env` con `PRIVATE_KEY`,
 ```bash
 cd contracts/solidity
 forge script script/Deploy.s.sol:Deploy --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+Si `PuntosToken`/`FiadoScoring` ya están desplegados y solo cambió `PaymentRouter.sol`, usar
+`RedeployPaymentRouter.s.sol` en vez de `Deploy.s.sol` — reusa el `PuntosToken` existente en
+vez de crear uno nuevo (que borraría el saldo de puntos de todos los que ya probaron la app):
+
+```bash
+cd contracts/solidity
+PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> \
+  forge script script/RedeployPaymentRouter.s.sol:RedeployPaymentRouter \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# después: cast send <FiadoScoringAddress> "setPaymentRouter(address)" <nuevoRouter> ...
+```
+
+Deploy de `PuntosPaymaster` (requiere `PuntosToken` ya desplegado; el EntryPoint v0.7 usa la
+misma dirección canónica `0x0000000071727De22E5E9d8BAf0edAc6f37da032` en toda red EVM, ya
+confirmada desplegada en Arbitrum Sepolia):
+
+```bash
+cd contracts/solidity
+PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> DEPOSIT_ETH=0.02ether \
+  forge script script/DeployPuntosPaymaster.s.sol:DeployPuntosPaymaster \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
 
 ### Contrato Stylus (FiadoScoring)
@@ -303,6 +401,16 @@ cp frontend/.env.example frontend/.env.local
 # ANTHROPIC_API_KEY y ORACLE_PRIVATE_KEY (testnet)
 pnpm run dev
 ```
+
+Para el login sin wallet y el gas pagado en PUNTOS hacen falta dos cuentas gratuitas más
+(las crea quien opera el proyecto, nunca se pegan en el chat):
+
+- [dashboard.privy.io](https://dashboard.privy.io) — crear una app, restringir los métodos de
+  login a email + SMS, copiar el App ID público a `NEXT_PUBLIC_PRIVY_APP_ID`.
+- [dashboard.pimlico.io](https://dashboard.pimlico.io) — API key gratis de testnet, a
+  `NEXT_PUBLIC_PIMLICO_API_KEY`.
+- `NEXT_PUBLIC_PUNTOS_PAYMASTER_ADDRESS` — la dirección de `PuntosPaymaster` desplegado
+  arriba.
 
 ## Regenerar ABIs para el frontend
 
