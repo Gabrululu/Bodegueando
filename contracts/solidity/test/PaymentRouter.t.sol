@@ -85,4 +85,41 @@ contract PaymentRouterTest is Test {
         vm.expectRevert(PaymentRouter.CashbackTooHigh.selector);
         router.setCashbackBps(1_001);
     }
+
+    function test_PayFiado_TransfersFundsAndRecordsRepaymentWithoutCashback() public {
+        vm.prank(bodega);
+        fiadoScoring.extendFiado(payer, 1 ether);
+        assertEq(fiadoScoring.getFiadoDebt(bodega, payer), 1 ether);
+
+        uint256 repayAmount = 0.4 ether;
+        vm.prank(payer);
+        router.payFiado{value: repayAmount}(bodega);
+
+        assertEq(bodega.balance, repayAmount);
+        assertEq(token.balanceOf(payer), 0, "repaying fiado should not mint cashback");
+        assertEq(fiadoScoring.getFiadoDebt(bodega, payer), 1 ether - repayAmount);
+    }
+
+    function test_PayFiado_OverpaymentCapsDebtAtZero() public {
+        vm.prank(bodega);
+        fiadoScoring.extendFiado(payer, 0.2 ether);
+
+        vm.prank(payer);
+        router.payFiado{value: 1 ether}(bodega);
+
+        assertEq(bodega.balance, 1 ether);
+        assertEq(fiadoScoring.getFiadoDebt(bodega, payer), 0);
+    }
+
+    function test_RevertWhen_PayFiadoUnregisteredBodega() public {
+        vm.prank(payer);
+        vm.expectRevert(PaymentRouter.UnknownBodega.selector);
+        router.payFiado{value: 1 ether}(makeAddr("randomAddress"));
+    }
+
+    function test_RevertWhen_PayFiadoZeroAmount() public {
+        vm.prank(payer);
+        vm.expectRevert(PaymentRouter.ZeroAmount.selector);
+        router.payFiado{value: 0}(bodega);
+    }
 }

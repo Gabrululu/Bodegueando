@@ -81,6 +81,19 @@
     },
     {
       "type": "function",
+      "name": "payFiado",
+      "inputs": [
+        {
+          "name": "bodega",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
       "name": "puntosToken",
       "inputs": [],
       "outputs": [
@@ -190,6 +203,31 @@
       "inputs": [
         {
           "name": "bps",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FiadoRepaid",
+      "inputs": [
+        {
+          "name": "bodega",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "customer",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
           "type": "uint256",
           "indexed": false,
           "internalType": "uint256"

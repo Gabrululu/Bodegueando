@@ -53,7 +53,12 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   const [payError, setPayError] = useState<string | null>(null);
   const [isPayConfirmed, setIsPayConfirmed] = useState(false);
 
-  const { formatSoles, solesToEth } = useExchangeRate();
+  const { formatSoles, solesToEth, ethPen } = useExchangeRate();
+  const [myCode, setMyCode] = useState<string | null>(null);
+  const [repayAmountSoles, setRepayAmountSoles] = useState("");
+  const [isRepaySubmitting, setIsRepaySubmitting] = useState(false);
+  const [repayError, setRepayError] = useState<string | null>(null);
+  const [isRepayConfirmed, setIsRepayConfirmed] = useState(false);
 
   const contractsConfigured = Boolean(fiadoScoringAddress && paymentRouterAddress);
 
@@ -134,6 +139,59 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     args: bodegaAddress ? [bodegaAddress] : undefined,
     query: { enabled: Boolean(bodegaAddress && fiadoScoringAddress && fiadoEnabled) },
   });
+
+  const debtQuery = useReadContract({
+    address: fiadoScoringAddress,
+    abi: fiadoScoringAbi,
+    functionName: "getFiadoDebt",
+    args: bodegaAddress && address ? [bodegaAddress, address] : undefined,
+    query: { enabled: Boolean(bodegaAddress && address && fiadoScoringAddress && fiadoEnabled) },
+  });
+  const debtWei = (debtQuery.data as bigint | undefined) ?? BigInt(0);
+
+  useEffect(() => {
+    if (debtWei > BigInt(0) && repayAmountSoles === "") {
+      setRepayAmountSoles(((Number(debtWei) / 1e18) * ethPen).toFixed(2));
+    }
+  }, [debtWei, ethPen, repayAmountSoles]);
+
+  async function handleRepay() {
+    if (!bodegaAddress || !paymentRouterAddress || !smartAccountClient || !address) return;
+    setIsRepaySubmitting(true);
+    setRepayError(null);
+    setIsRepayConfirmed(false);
+    try {
+      const ethAmount = solesToEth(Number(repayAmountSoles || "0"));
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: paymentRouterAddress,
+          abi: paymentRouterAbi,
+          functionName: "payFiado",
+          args: [bodegaAddress],
+          value: parseEther(ethAmount.toFixed(18)),
+        },
+      ]);
+      setIsRepayConfirmed(true);
+      setRepayAmountSoles("");
+      debtQuery.refetch();
+    } catch {
+      setRepayError("No se pudo completar el pago del fiado. Intenta de nuevo.");
+    } finally {
+      setIsRepaySubmitting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!address) return;
+    fetch("/api/bodega/code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address }),
+    })
+      .then((res) => res.json())
+      .then((data) => setMyCode(data.code ?? null))
+      .catch(() => setMyCode(null));
+  }, [address]);
 
   async function handlePay() {
     if (!bodegaAddress || !paymentRouterAddress || !smartAccountClient || !address) return;
@@ -278,6 +336,31 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
               ({scoreQuery.isLoading ? "…" : score}/1000{aiAdjusted ? ", ajustado por IA" : ""})
             </span>
           </div>
+
+          {debtWei > BigInt(0) && (
+            <div className="mt-1 flex flex-col gap-2 border-t border-black/10 pt-3">
+              <p className="text-xs text-[#6b6d64]">
+                Le debes a esta bodega: <span className="font-medium text-[#0a0a0b]">{formatSoles(Number(debtWei) / 1e18)}</span>
+              </p>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-[#6b6d64]">S/</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.5"
+                  value={repayAmountSoles}
+                  onChange={(e) => setRepayAmountSoles(e.target.value)}
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                />
+              </div>
+              <button onClick={handleRepay} disabled={!isConnected || isRepaySubmitting} className={outlineButtonClass}>
+                {isRepaySubmitting ? "Pagando..." : "Pagar mi fiado"}
+              </button>
+              {repayError && <p className="text-xs text-red-500">{repayError}</p>}
+              {isRepayConfirmed && <p className="text-xs text-green-600">¡Listo! Se descontó de tu deuda ✓</p>}
+            </div>
+          )}
         </div>
       )}
       {bodegaAddress && !fiadoEnabled && !fiadoEnabledQuery.isLoading && (
@@ -318,6 +401,22 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
         {payError && <p className="text-xs text-red-500">{payError}</p>}
         {isPayConfirmed && <p className="text-xs text-green-600">¡Listo! Tu pago se registró ✓</p>}
       </section>
+
+      {isConnected && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Tu código para que te fíen</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Muéstraselo a tu bodega si te va a fiar — así el fiado queda registrado a tu nombre.
+          </p>
+          {myCode ? (
+            <p className="text-center text-2xl font-semibold tracking-widest text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+              {myCode}
+            </p>
+          ) : (
+            <p className="text-xs text-[#6b6d64]">Generando tu código…</p>
+          )}
+        </section>
+      )}
 
       {isConnected && TELEGRAM_BOT_USERNAME && (
         <section className={cardClass}>

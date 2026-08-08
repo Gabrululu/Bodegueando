@@ -26,6 +26,7 @@ contract PaymentRouter is Ownable {
     event PaymentReceived(address indexed payer, address indexed bodega, uint256 amount, uint256 cashback);
     event FiadoScoringUpdated(address indexed fiadoScoring);
     event CashbackBpsUpdated(uint256 bps);
+    event FiadoRepaid(address indexed bodega, address indexed customer, uint256 amount);
 
     constructor(address initialOwner, PuntosToken _puntosToken, IFiadoScoring _fiadoScoring) Ownable(initialOwner) {
         puntosToken = _puntosToken;
@@ -76,5 +77,21 @@ contract PaymentRouter is Ownable {
         fiadoScoring.recordPayment(bodega, msg.value, block.timestamp);
 
         emit PaymentReceived(msg.sender, bodega, msg.value, cashback);
+    }
+
+    /// @notice Pay back fiado debt owed to `bodega`. `msg.value` is the repayment amount,
+    /// forwarded to the bodega exactly like receivePayment — but recorded as a debt repayment
+    /// on FiadoScoring instead of a new purchase, so no cashback is minted here (clearing a
+    /// debt isn't a new sale to reward).
+    function payFiado(address bodega) external payable {
+        if (msg.value == 0) revert ZeroAmount();
+        if (!isBodega[bodega]) revert UnknownBodega();
+
+        (bool sent,) = payable(bodega).call{value: msg.value}("");
+        require(sent, "transfer to bodega failed");
+
+        fiadoScoring.repayFiado(bodega, msg.sender, msg.value);
+
+        emit FiadoRepaid(bodega, msg.sender, msg.value);
     }
 }

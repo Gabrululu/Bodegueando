@@ -40,4 +40,24 @@ interface IFiadoScoring {
     /// @notice Turns fiado on/off for the caller's own bodega (`msg.sender`). No separate
     /// registry check — only a bodega can toggle its own flag.
     function setFiadoEnabled(bool enabled) external;
+
+    /// @notice Bodega (`msg.sender`) extends fiado credit to `customer`, for `amount` wei. No
+    /// money moves — this is the IOU. Reverts if fiado isn't enabled for the caller or if it
+    /// would push total outstanding past the caller's own credit limit.
+    function extendFiado(address customer, uint256 amount) external;
+
+    /// @notice Records a fiado repayment from `customer` to `bodega`. Restricted on the Stylus
+    /// side to the configured payment_router address — called from `PaymentRouter.payFiado`
+    /// after the real ETH transfer to `bodega` already happened.
+    function repayFiado(address bodega, address customer, uint256 amount) external;
+
+    /// @notice Current outstanding fiado debt that `customer` owes `bodega`, in wei.
+    function getFiadoDebt(address bodega, address customer) external view returns (uint256);
+
+    /// @notice How much fiado `bodega` still has room to extend right now (credit limit minus
+    /// what's already outstanding across all its customers).
+    function getAvailableFiado(address bodega) external view returns (uint256);
+
+    /// @notice Total fiado currently outstanding for `bodega`, summed across all its customers.
+    function getTotalOutstanding(address bodega) external view returns (uint256);
 }

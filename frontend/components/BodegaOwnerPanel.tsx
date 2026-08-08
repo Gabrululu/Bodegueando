@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { parseEther, type Address } from "viem";
 import { useReadContract } from "wagmi";
 import { QRCodeSVG } from "qrcode.react";
 import { fiadoScoringAbi, fiadoScoringAddress, paymentRouterAddress } from "@/lib/contracts";
@@ -18,6 +19,8 @@ const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME;
 const cardClass = "flex flex-col gap-3 rounded-[20px] border border-black/10 bg-[#fffffc] p-5 shadow-sm";
 const sectionTitleClass =
   "text-sm font-semibold uppercase tracking-wide text-[#6b6d64] [font-family:var(--font-bricolage)]";
+const inputClass =
+  "rounded-xl border border-black/15 bg-white px-3 py-2 text-center text-lg font-semibold tracking-widest text-[#0a0a0b] outline-none focus:border-black/35";
 const primaryButtonClass =
   "cursor-pointer rounded-full px-4 py-2 text-sm font-semibold text-[#0a0a0b] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0";
 const primaryButtonStyle = {
@@ -42,8 +45,16 @@ export function BodegaOwnerPanel() {
   const [linkCode, setLinkCode] = useState<string | null>(null);
   const [isGeneratingCode, setIsGeneratingCode] = useState(false);
   const [bodegaCode, setBodegaCode] = useState<string | null>(null);
+  const [customerCodeInput, setCustomerCodeInput] = useState("");
+  const [customerAddress, setCustomerAddress] = useState<Address | undefined>(undefined);
+  const [isResolvingCustomer, setIsResolvingCustomer] = useState(false);
+  const [customerNotFound, setCustomerNotFound] = useState(false);
+  const [fiarAmountSoles, setFiarAmountSoles] = useState("10");
+  const [isFiarSubmitting, setIsFiarSubmitting] = useState(false);
+  const [fiarError, setFiarError] = useState<string | null>(null);
+  const [fiarConfirmed, setFiarConfirmed] = useState(false);
 
-  const { formatSoles } = useExchangeRate();
+  const { formatSoles, solesToEth } = useExchangeRate();
 
   useEffect(() => {
     if (!address) return;
@@ -100,13 +111,102 @@ export function BodegaOwnerPanel() {
     query: { enabled: Boolean(address && fiadoScoringAddress) },
   });
 
+  const totalOutstandingQuery = useReadContract({
+    address: fiadoScoringAddress,
+    abi: fiadoScoringAbi,
+    functionName: "getTotalOutstanding",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address && fiadoScoringAddress) },
+  });
+
+  const availableFiadoQuery = useReadContract({
+    address: fiadoScoringAddress,
+    abi: fiadoScoringAbi,
+    functionName: "getAvailableFiado",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address && fiadoScoringAddress) },
+  });
+
   const refetchAll = () => {
     fiadoEnabledQuery.refetch();
     scoreQuery.refetch();
     limitQuery.refetch();
     aiInfoQuery.refetch();
     historyQuery.refetch();
+    totalOutstandingQuery.refetch();
+    availableFiadoQuery.refetch();
   };
+
+  const isValidCustomerCodeFormat = /^\d{6}$/.test(customerCodeInput.trim());
+
+  useEffect(() => {
+    if (!isValidCustomerCodeFormat) return;
+    const code = customerCodeInput.trim();
+    let cancelled = false;
+
+    async function resolve() {
+      setIsResolvingCustomer(true);
+      setCustomerNotFound(false);
+      try {
+        const res = await fetch(`/api/bodega/code?code=${code}`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.address) {
+          setCustomerAddress(data.address as Address);
+        } else {
+          setCustomerAddress(undefined);
+          setCustomerNotFound(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setCustomerAddress(undefined);
+          setCustomerNotFound(true);
+        }
+      } finally {
+        if (!cancelled) setIsResolvingCustomer(false);
+      }
+    }
+
+    resolve();
+    return () => {
+      cancelled = true;
+    };
+  }, [customerCodeInput, isValidCustomerCodeFormat]);
+
+  function handleCustomerCodeChange(value: string) {
+    const trimmed = value.trim();
+    setCustomerCodeInput(trimmed);
+    if (!/^\d{6}$/.test(trimmed)) {
+      setCustomerAddress(undefined);
+      setCustomerNotFound(false);
+    }
+  }
+
+  async function handleFiar() {
+    if (!customerAddress || !fiadoScoringAddress || !smartAccountClient || !address) return;
+    setIsFiarSubmitting(true);
+    setFiarError(null);
+    setFiarConfirmed(false);
+    try {
+      const ethAmount = solesToEth(Number(fiarAmountSoles || "0"));
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: fiadoScoringAddress,
+          abi: fiadoScoringAbi,
+          functionName: "extendFiado",
+          args: [customerAddress, parseEther(ethAmount.toFixed(18))],
+        },
+      ]);
+      setFiarConfirmed(true);
+      setCustomerCodeInput("");
+      setCustomerAddress(undefined);
+      refetchAll();
+    } catch {
+      setFiarError("No se pudo registrar el fiado. Revisa que tengas espacio disponible para fiar esa cantidad.");
+    } finally {
+      setIsFiarSubmitting(false);
+    }
+  }
 
   async function handleToggle(enabled: boolean) {
     if (!fiadoScoringAddress || !smartAccountClient || !address) return;
@@ -338,6 +438,59 @@ export function BodegaOwnerPanel() {
                 )}
               </div>
             )}
+
+            <div className={highlightBoxClass}>
+              <p className="text-xs text-[#6b6d64]">Fiado que ya diste (pendiente de cobro)</p>
+              <p className="text-lg font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+                {totalOutstandingQuery.isLoading
+                  ? "…"
+                  : formatSoles(Number((totalOutstandingQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18)}
+              </p>
+              <p className="mt-1 text-xs text-[#6b6d64]">
+                Espacio disponible para fiar más:{" "}
+                {availableFiadoQuery.isLoading
+                  ? "…"
+                  : formatSoles(Number((availableFiadoQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18)}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label htmlFor="customerCode" className="text-sm font-medium text-[#0a0a0b]">
+                Fiar a un cliente
+              </label>
+              <input
+                id="customerCode"
+                inputMode="numeric"
+                value={customerCodeInput}
+                onChange={(e) => handleCustomerCodeChange(e.target.value)}
+                placeholder="El código de 6 dígitos de tu cliente"
+                className={inputClass}
+              />
+              {isResolvingCustomer && <p className="text-xs text-[#6b6d64]">Buscando...</p>}
+              {customerNotFound && <p className="text-xs text-red-500">No encontramos ese código.</p>}
+
+              {customerAddress && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-[#6b6d64]">S/</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.5"
+                      value={fiarAmountSoles}
+                      onChange={(e) => setFiarAmountSoles(e.target.value)}
+                      className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                    />
+                  </div>
+                  <button onClick={handleFiar} disabled={isFiarSubmitting} className={primaryButtonClass} style={primaryButtonStyle}>
+                    {isFiarSubmitting ? "Fiando..." : "Fiar a este cliente"}
+                  </button>
+                </>
+              )}
+              {fiarError && <p className="text-xs text-red-500">{fiarError}</p>}
+              {fiarConfirmed && <p className="text-xs text-green-600">¡Listo! Ya quedó registrado el fiado ✓</p>}
+            </div>
           </div>
         )}
       </section>

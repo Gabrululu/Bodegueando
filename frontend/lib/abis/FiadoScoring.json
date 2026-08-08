@@ -2,12 +2,27 @@
   "abi": [
     {
       "inputs": [],
+      "name": "FiadoNotEnabled",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InsufficientLimit",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "Unauthorized",
       "type": "error"
     },
     {
       "inputs": [],
       "name": "ZeroAddress",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroAmount",
       "type": "error"
     },
     {
@@ -21,6 +36,24 @@
         }
       ],
       "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "customer",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amount",
+          "type": "uint256"
+        }
+      ],
+      "name": "extendFiado",
+      "outputs": [],
+      "stateMutability": "nonpayable",
       "type": "function"
     },
     {
@@ -55,7 +88,50 @@
           "type": "address"
         }
       ],
+      "name": "getAvailableFiado",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "bodega",
+          "type": "address"
+        }
+      ],
       "name": "getCreditLimit",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "bodega",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "customer",
+          "type": "address"
+        }
+      ],
+      "name": "getFiadoDebt",
       "outputs": [
         {
           "internalType": "uint256",
@@ -99,6 +175,25 @@
         }
       ],
       "name": "getScore",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "bodega",
+          "type": "address"
+        }
+      ],
+      "name": "getTotalOutstanding",
       "outputs": [
         {
           "internalType": "uint256",
@@ -173,6 +268,29 @@
         }
       ],
       "name": "recordPayment",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "bodega",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "customer",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amount",
+          "type": "uint256"
+        }
+      ],
+      "name": "repayFiado",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"

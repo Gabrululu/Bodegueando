@@ -49,4 +49,30 @@ contract MockFiadoScoring is IFiadoScoring {
     function paymentsLength() external view returns (uint256) {
         return payments.length;
     }
+
+    mapping(address => mapping(address => uint256)) public fiadoDebt;
+    mapping(address => uint256) public totalOutstanding;
+
+    function extendFiado(address customer, uint256 amount) external override {
+        fiadoDebt[msg.sender][customer] += amount;
+        totalOutstanding[msg.sender] += amount;
+    }
+
+    function repayFiado(address bodega, address customer, uint256 amount) external override {
+        uint256 deducted = amount > fiadoDebt[bodega][customer] ? fiadoDebt[bodega][customer] : amount;
+        fiadoDebt[bodega][customer] -= deducted;
+        totalOutstanding[bodega] -= deducted;
+    }
+
+    function getFiadoDebt(address bodega, address customer) external view override returns (uint256) {
+        return fiadoDebt[bodega][customer];
+    }
+
+    function getAvailableFiado(address) external pure override returns (uint256) {
+        return 0;
+    }
+
+    function getTotalOutstanding(address bodega) external view override returns (uint256) {
+        return totalOutstanding[bodega];
+    }
 }

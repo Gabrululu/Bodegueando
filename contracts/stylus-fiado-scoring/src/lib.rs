@@ -22,6 +22,14 @@
 //!   frontend hides the fiado UI entirely unless the bodega has opted in. Payment history and
 //!   scoring still accumulate regardless, so there's already a track record the moment a
 //!   bodega flips the switch on.
+//! - `credit_limit` alone was only ever a suggested ceiling, not an actual ledger — nothing
+//!   tracked how much of it a bodega had actually lent out, or to whom. `extend_fiado` /
+//!   `repay_fiado` add that missing debt ledger: `fiado_debt[bodega][customer]` tracks what
+//!   a specific customer owes a specific bodega, and `total_outstanding[bodega]` caps new
+//!   extensions at the bodega's own `credit_limit`. `extend_fiado` is a direct bodega call
+//!   (same `msg.sender`-keyed pattern as `set_fiado_enabled`, since no money moves when a
+//!   bodega fiar's someone); `repay_fiado` is `payment_router`-gated like `record_payment`,
+//!   since real ETH changes hands in `PaymentRouter.payFiado` before this updates the ledger.
 //!
 //! Note: this code is a hackathon-stage contract and has not been audited.
 
@@ -46,15 +54,26 @@ sol! {
     error Unauthorized();
     #[derive(Debug)]
     error ZeroAddress();
+    #[derive(Debug)]
+    error ZeroAmount();
+    #[derive(Debug)]
+    error FiadoNotEnabled();
+    #[derive(Debug)]
+    error InsufficientLimit();
 
     event PaymentRecorded(address indexed bodega, uint256 amount, uint256 timestamp);
     event ScoreUpdated(address indexed bodega, uint256 score, uint256 creditLimit, bool aiAdjusted);
+    event FiadoExtended(address indexed bodega, address indexed customer, uint256 amount);
+    event FiadoRepaid(address indexed bodega, address indexed customer, uint256 amount);
 }
 
 #[derive(Debug, SolidityError)]
 pub enum FiadoError {
     Unauthorized(Unauthorized),
     ZeroAddress(ZeroAddress),
+    ZeroAmount(ZeroAmount),
+    FiadoNotEnabled(FiadoNotEnabled),
+    InsufficientLimit(InsufficientLimit),
 }
 
 sol_storage! {
@@ -75,6 +94,9 @@ sol_storage! {
         mapping(address => uint256) ai_adjusted_at;
 
         mapping(address => bool) fiado_enabled;
+
+        mapping(address => mapping(address => uint256)) fiado_debt;
+        mapping(address => uint256) total_outstanding;
     }
 }
 
@@ -177,6 +199,74 @@ impl FiadoScoring {
     pub fn set_fiado_enabled(&mut self, enabled: bool) {
         let bodega = self.vm().msg_sender();
         self.fiado_enabled.setter(bodega).set(enabled);
+    }
+
+    /// Bodega extends fiado (credit) to a specific customer — the actual IOU a "fiado
+    /// inteligente" promise needs, on top of the suggested ceiling `credit_limit` already
+    /// provides. No money moves here: the customer takes goods now and owes `amount` to
+    /// `bodega`. Keyed on `msg.sender` like `set_fiado_enabled` (only a bodega can fiar its
+    /// own customers), capped by the bodega's own available room so it can never fiar more
+    /// than its track record supports.
+    pub fn extend_fiado(&mut self, customer: Address, amount: U256) -> Result<(), FiadoError> {
+        let bodega = self.vm().msg_sender();
+
+        if amount.is_zero() {
+            return Err(FiadoError::ZeroAmount(ZeroAmount {}));
+        }
+        if !self.fiado_enabled.get(bodega) {
+            return Err(FiadoError::FiadoNotEnabled(FiadoNotEnabled {}));
+        }
+
+        let outstanding = self.total_outstanding.get(bodega);
+        let limit = self.credit_limit.get(bodega);
+        if outstanding.saturating_add(amount) > limit {
+            return Err(FiadoError::InsufficientLimit(InsufficientLimit {}));
+        }
+
+        let current_debt = self.fiado_debt.getter(bodega).get(customer);
+        self.fiado_debt.setter(bodega).setter(customer).set(current_debt.saturating_add(amount));
+        self.total_outstanding.setter(bodega).set(outstanding.saturating_add(amount));
+
+        self.vm().log(FiadoExtended { bodega, customer, amount });
+        Ok(())
+    }
+
+    /// Records a fiado repayment from `customer` to `bodega`. Restricted to `payment_router` —
+    /// same trust boundary as `record_payment` — because the actual ETH transfer already
+    /// happened in `PaymentRouter.payFiado` before this call; this just updates the debt
+    /// ledger. Caps the deduction at the outstanding debt so an over-payment can't underflow
+    /// the balance.
+    pub fn repay_fiado(&mut self, bodega: Address, customer: Address, amount: U256) -> Result<(), FiadoError> {
+        if self.vm().msg_sender() != self.payment_router.get() {
+            return Err(FiadoError::Unauthorized(Unauthorized {}));
+        }
+
+        let current_debt = self.fiado_debt.getter(bodega).get(customer);
+        let deducted = amount.min(current_debt);
+
+        self.fiado_debt.setter(bodega).setter(customer).set(current_debt - deducted);
+
+        let outstanding = self.total_outstanding.get(bodega);
+        self.total_outstanding.setter(bodega).set(outstanding.saturating_sub(deducted));
+
+        self.vm().log(FiadoRepaid { bodega, customer, amount: deducted });
+        Ok(())
+    }
+
+    /// Current outstanding fiado debt that `customer` owes `bodega`.
+    pub fn get_fiado_debt(&self, bodega: Address, customer: Address) -> U256 {
+        self.fiado_debt.getter(bodega).get(customer)
+    }
+
+    /// How much fiado `bodega` still has room to extend right now: its credit limit minus
+    /// what's already outstanding across all its customers.
+    pub fn get_available_fiado(&self, bodega: Address) -> U256 {
+        self.credit_limit.get(bodega).saturating_sub(self.total_outstanding.get(bodega))
+    }
+
+    /// Total fiado currently outstanding for `bodega`, summed across all its customers.
+    pub fn get_total_outstanding(&self, bodega: Address) -> U256 {
+        self.total_outstanding.get(bodega)
     }
 
     pub fn get_payment_history(&self, bodega: Address) -> (Vec<U256>, Vec<U256>) {
@@ -375,5 +465,80 @@ mod test {
 
         contract.set_fiado_enabled(false);
         assert!(!contract.is_fiado_enabled(bodega));
+    }
+
+    #[test]
+    fn test_extend_fiado_requires_enabled_and_respects_limit() {
+        let vm = TestVM::default();
+        let mut contract = FiadoScoring::from(&vm);
+
+        let owner = Address::from([1u8; 20]);
+        let router = Address::from([2u8; 20]);
+        let bodega = Address::from([3u8; 20]);
+        let customer = Address::from([5u8; 20]);
+
+        contract.constructor(owner).unwrap();
+        vm.set_sender(owner);
+        contract.set_payment_router(router).unwrap();
+
+        // Build up a payment history so credit_limit > 0.
+        vm.set_sender(router);
+        vm.set_block_timestamp(1_000_000);
+        contract.record_payment(bodega, U256::from(1_000_000_000_000_000_000u128), U256::ZERO).unwrap();
+        let limit = contract.get_credit_limit(bodega);
+        assert!(limit > U256::ZERO);
+
+        // Fiado is off by default — extending fails.
+        vm.set_sender(bodega);
+        assert!(contract.extend_fiado(customer, U256::from(1)).is_err());
+
+        contract.set_fiado_enabled(true);
+
+        // Zero amount is rejected.
+        assert!(contract.extend_fiado(customer, U256::ZERO).is_err());
+
+        // Extending past the limit is rejected.
+        assert!(contract.extend_fiado(customer, limit + U256::from(1)).is_err());
+
+        // A valid extension updates debt and available room.
+        let half = limit / U256::from(2u64);
+        contract.extend_fiado(customer, half).unwrap();
+        assert_eq!(contract.get_fiado_debt(bodega, customer), half);
+        assert_eq!(contract.get_total_outstanding(bodega), half);
+        assert_eq!(contract.get_available_fiado(bodega), limit - half);
+    }
+
+    #[test]
+    fn test_repay_fiado_reduces_debt_caps_overpayment_and_is_router_gated() {
+        let vm = TestVM::default();
+        let mut contract = FiadoScoring::from(&vm);
+
+        let owner = Address::from([1u8; 20]);
+        let router = Address::from([2u8; 20]);
+        let bodega = Address::from([3u8; 20]);
+        let customer = Address::from([5u8; 20]);
+
+        contract.constructor(owner).unwrap();
+        vm.set_sender(owner);
+        contract.set_payment_router(router).unwrap();
+
+        vm.set_sender(router);
+        vm.set_block_timestamp(1_000_000);
+        contract.record_payment(bodega, U256::from(1_000_000_000_000_000_000u128), U256::ZERO).unwrap();
+
+        vm.set_sender(bodega);
+        contract.set_fiado_enabled(true);
+        let debt = U256::from(1_000_000_000_000_000u128);
+        contract.extend_fiado(customer, debt).unwrap();
+
+        // Only the router can repay — a random caller (even the bodega itself) can't.
+        assert!(contract.repay_fiado(bodega, customer, debt).is_err());
+
+        vm.set_sender(router);
+        // Overpaying caps at the outstanding debt instead of underflowing.
+        contract.repay_fiado(bodega, customer, debt + U256::from(999)).unwrap();
+        assert_eq!(contract.get_fiado_debt(bodega, customer), U256::ZERO);
+        assert_eq!(contract.get_total_outstanding(bodega), U256::ZERO);
+        assert_eq!(contract.get_available_fiado(bodega), contract.get_credit_limit(bodega));
     }
 }

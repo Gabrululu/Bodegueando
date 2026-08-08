@@ -1,7 +1,9 @@
 # Bodegueando
 Plataforma que digitaliza bodegas de barrio en Lima: cobros por QR, cashback/puntos de
-lealtad, y "fiado inteligente" con un límite de crédito calculado on-chain a partir del
-historial transaccional, ajustado por una capa de IA (Anthropic) que analiza patrones de pago.
+lealtad, y "fiado inteligente" — un límite de crédito calculado on-chain a partir del
+historial transaccional, ajustado por una capa de IA (Anthropic) que analiza patrones de pago,
+y un libro de deuda real por cliente: cada bodega puede fiarle a un cliente específico y ese
+cliente puede pagar su deuda de vuelta, todo verificable on-chain.
 
 ## Arquitectura
 
@@ -15,12 +17,15 @@ bodegueando/
 
 - **PaymentRouter.sol / PuntosToken.sol** (Solidity/Foundry): reciben el pago de un
   cliente hacia una bodega, otorgan cashback en `PUNTOS` (ERC-20), y registran el pago
-  en `FiadoScoring`.
+  en `FiadoScoring`. También expone `payFiado`, para que un cliente pague de vuelta una
+  deuda de fiado (sin cashback, porque no es una compra nueva).
 - **FiadoScoring** (Rust/Stylus): mantiene un buffer acotado de los últimos pagos por
   bodega y calcula un score/límite de crédito heurístico (promedio móvil de pagos,
   frecuencia, penalización por mora) — el cómputo pesado que justifica usar Stylus en
   vez de Solidity puro. También expone `updateScoreFromAi` para que el módulo de IA
-  del frontend pueda ajustar el score con una recomendación externa.
+  del frontend pueda ajustar el score con una recomendación externa, y un libro de
+  deuda real por cliente (`extendFiado`/`repayFiado`) — ver "Fiado con libro de deuda
+  real" más abajo.
 - **Frontend** (Next.js): conecta ambos contratos vía wagmi/viem. La ruta
   `app/api/fiado-score/route.ts` lee el historial on-chain de una bodega, llama a la
   API de Anthropic (Claude) para obtener una recomendación de score/límite, y la
@@ -30,10 +35,16 @@ bodegueando/
 
 | Contrato | Dirección | Arbiscan |
 |---|---|---|
-| **FiadoScoring** (Stylus/Rust) | `0x244CF96dDfa77c103B569EEe2Ff33f61641e3e5e` | [ver / verificado](https://sepolia.arbiscan.io/address/0x244CF96dDfa77c103B569EEe2Ff33f61641e3e5e) |
+| **FiadoScoring** (Stylus/Rust) | `0x0724643AdbC29CE231cd1D9fE10e72947b39D9AC` | [ver / verificado](https://sepolia.arbiscan.io/address/0x0724643AdbC29CE231cd1D9fE10e72947b39D9AC) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
-| **PaymentRouter** | `0xE0780148AAB2497E745d4cCA5Ca4a481f345431b` | [ver código verificado](https://sepolia.arbiscan.io/address/0xE0780148AAB2497E745d4cCA5Ca4a481f345431b#code) |
+| **PaymentRouter** | `0xF9cCfBbB2DE14240c680F8E8Fec337e4cB14c8fD` | [ver código verificado](https://sepolia.arbiscan.io/address/0xF9cCfBbB2DE14240c680F8E8Fec337e4cB14c8fD#code) |
 | **PuntosPaymaster** | `0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a` | [ver código verificado](https://sepolia.arbiscan.io/address/0x43FC54527bF87E50F0Fd1B7331A7A6C20ecE568a#code) |
+
+`FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
+fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `PuntosPaymaster`
+no cambiaron — se reusaron tal cual (el minter de `PuntosToken` se re-vinculó al `PaymentRouter`
+nuevo). El `aiOracle` del `FiadoScoring` nuevo se volvió a autorizar con la misma cuenta que
+tenía el anterior.
 
 `PuntosToken`, `PaymentRouter` y `PuntosPaymaster` están verificados con código fuente Solidity legible en
 Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
@@ -47,9 +58,15 @@ Dos vistas separadas, no una pantalla única que muestra u oculta secciones:
 
 - **`BuyerPanel.tsx`** (comprador): buscar una bodega por su código, ver su fiado
   disponible si lo activó (solo lectura) y pagarle vía `PaymentRouter.receivePayment`.
+  También muestra su propio código (para que una bodega le fíe a él) y, si tiene una
+  deuda de fiado con la bodega que está mirando (`FiadoScoring.getFiadoDebt`), un
+  botón para pagarla vía `PaymentRouter.payFiado`.
 - **`BodegaOwnerPanel.tsx`** (bodeguero): su propio código para compartir con
-  clientes, el interruptor de fiado (`setFiadoEnabled`), y un botón para recalcular
-  su fiado con IA (`/api/fiado-score`) — esto ya no lo puede disparar un comprador.
+  clientes, el interruptor de fiado (`setFiadoEnabled`), un botón para recalcular
+  su fiado con IA (`/api/fiado-score`) — esto ya no lo puede disparar un comprador —
+  y un formulario para fiarle a un cliente específico por su código
+  (`FiadoScoring.extendFiado`), con la deuda total pendiente de cobro y el espacio
+  disponible para seguir fiando.
 
 `app/page.tsx` detecta el rol solo: después del login (ver "Login sin wallet" abajo), lee
 `PaymentRouter.isBodega(direcciónDeLaSmartAccount)` y muestra el panel que corresponde. Por
@@ -85,6 +102,73 @@ Claude devolvió una recomendación más conservadora que la heurística ("*solo
 no es historial suficiente*") y quedó confirmada on-chain. Esa prueba corrió contra el
 `FiadoScoring` anterior (antes de agregar el toggle de fiado); la mecánica es idéntica
 en el contrato actual.
+
+### Fiado con libro de deuda real: `extendFiado` / `repayFiado` / `payFiado`
+
+Hasta acá, `getCreditLimit` era solo un techo sugerido por bodega — nada registraba cuánto de
+ese fiado ya se le había dado a un cliente en concreto, ni si lo había pagado de vuelta.
+`FiadoScoring` ahora lleva ese libro de deuda real:
+
+- **`extendFiado(cliente, monto)`** — la bodega (`msg.sender`, mismo patrón que
+  `setFiadoEnabled`) le fía a un cliente específico. No mueve dinero: es la promesa de que el
+  cliente se lleva algo ahora y paga después. Falla si el fiado está apagado para esa bodega o
+  si supera el espacio disponible (`credit_limit - total_outstanding` de esa misma bodega).
+- **`repayFiado(bodega, cliente, monto)`** — restringida a `payment_router`, igual que
+  `recordPayment`, porque el ETH real ya se movió en `PaymentRouter.payFiado` antes de esta
+  llamada. Si el cliente paga de más, el descuento se limita a la deuda pendiente (sin
+  underflow ni revert).
+- **`PaymentRouter.payFiado(bodega)`** — función `payable`: el comprador manda el ETH
+  (equivalente a los soles que está pagando), se transfiere a la bodega igual que
+  `receivePayment`, pero **no** otorga cashback (pagar una deuda no es una compra nueva) y
+  llama a `repayFiado` en vez de `recordPayment`.
+- **`getFiadoDebt(bodega, cliente)`**, **`getAvailableFiado(bodega)`**,
+  **`getTotalOutstanding(bodega)`** — nuevas vistas que usa el frontend: `BodegaOwnerPanel`
+  muestra cuánto fiado ya dio (pendiente de cobro) y cuánto espacio le queda, y le permite
+  fiarle a un cliente por su código de 6 dígitos; `BuyerPanel` muestra su propio código (mismo
+  sistema de `lib/bodegaCodes.ts`, ya genérico por dirección — no hizo falta construir uno
+  nuevo) para dárselo a su bodega, y si tiene una deuda con la bodega que está mirando, puede
+  pagarla ahí mismo.
+
+Cubierto con tests unitarios en ambos contratos: `cargo test` (Rust, 6/6, incluyendo límite
+excedido, fiado apagado, y que solo `payment_router` puede llamar `repayFiado`) y
+`forge test` (Solidity, 17/17, incluyendo transferencia de fondos, ausencia de cashback, y
+sobrepago).
+
+**Redesplegado y verificado en Arbitrum Sepolia** (direcciones nuevas en la tabla de arriba):
+`FiadoScoring` vía `cargo stylus deploy` + `cargo stylus verify --deployment-tx` (reproducible,
+Docker), `PaymentRouter` vía `RedeployPaymentRouter.s.sol --verify` (reusa el `PuntosToken`
+existente), reconectados con `setPaymentRouter` y con el `aiOracle` reautorizado en el contrato
+nuevo. Nota para quien repita este deploy: `cargo stylus deploy --constructor-args` tiene
+`allow_hyphen_values` activado en cargo-stylus 0.10.8, así que se traga cualquier flag que venga
+después como si fuera otro argumento del constructor — `--constructor-args` tiene que ir **al
+final** del comando.
+
+**Corrida real de punta a punta contra los contratos nuevos** (dos cuentas reales, no
+simuladas: la bodega de prueba de siempre y una wallet de cliente descartable recién creada
+para esta corrida):
+
+1. El cliente le paga a la bodega el equivalente a 0.0002 ETH vía `receivePayment`
+   ([tx `0x518765...`](https://sepolia.arbiscan.io/tx/0x518765873e416fe33fb92c34d49298e6c1c1f65b2f4f68c182c767d8d63f656d)) —
+   recibe cashback en `PUNTOS` automáticamente (`4e12` wei, exactamente 2% = `cashbackBps`
+   por defecto).
+2. La bodega activa fiado (`setFiadoEnabled(true)`) y, con el historial ya acumulado
+   (`getScore` = 702, `getCreditLimit` ≈ 0.0004212 ETH), le fía al cliente el 40% de su
+   límite disponible: `extendFiado(cliente, 0.00016848 ETH)`
+   ([tx `0xaff74d...`](https://sepolia.arbiscan.io/tx/0xaff74d8dc46c8f0ee58a9aaec74399694210a091801831e2d2560151ac0c92b5)).
+   `getFiadoDebt(bodega, cliente)` pasa de `0` a `168480000000000` wei on-chain.
+3. El cliente paga una parte de su deuda con `payFiado`
+   ([tx `0xf889c9...`](https://sepolia.arbiscan.io/tx/0xf889c985d7c7ce0b0cf19ecdc1761f37a2b2bbb15d631e28b97a43f4d551300a)):
+   la deuda baja de `168480000000000` a `68480000000000` wei — el descuento parcial funciona
+   igual en vivo que en los tests.
+4. El cliente paga el resto con un segundo `payFiado`
+   ([tx `0xbc496a...`](https://sepolia.arbiscan.io/tx/0xbc496afbfc85eca5641513c074adc98051dd56567f056ed2ad00ebb67b1edb40)):
+   `getFiadoDebt` vuelve a `0`, `getTotalOutstanding` vuelve a `0`, y
+   `getAvailableFiado` vuelve al límite completo (`421200000000000` wei) — el espacio de
+   crédito se libera exactamente como debería.
+
+El sobrepago y el control de acceso de `repayFiado` (solo `payment_router`) ya están cubiertos
+por los tests locales, así que esta corrida se enfocó en probar el camino feliz completo con
+ETH real moviéndose entre dos cuentas distintas en Arbitrum Sepolia.
 
 ### El bot de Telegram como perfil (probado en vivo)
 
@@ -283,6 +367,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Pago QR → cashback → puntos (`PaymentRouter` + `PuntosToken`) | ✅ Desplegado y probado en Arbitrum Sepolia |
 | Fiado con scoring on-chain (`FiadoScoring`, Stylus) | ✅ Desplegado y verificado |
 | Fiado opt-in por bodega (`setFiadoEnabled`/`isFiadoEnabled`) | ✅ Desplegado — apagado por defecto, cada bodega prende el suyo |
+| Ledger de fiado por cliente (`extendFiado`/`repayFiado`/`payFiado`) | ✅ Probado en vivo end-to-end en Arbitrum Sepolia (además de 6/6 Rust, 17/17 Solidity) — ver "Fiado con libro de deuda real" |
 | Ajuste de fiado con IA (Claude, en español, escribe on-chain) | ✅ Probado en vivo end-to-end |
 | Dashboard web (leer score/límite, pagar, pedir recálculo IA) | ✅ Funcional |
 | Vistas separadas bodeguero/comprador, detectadas por rol on-chain | ✅ Funcional (`isBodega` en `PaymentRouter`) |
