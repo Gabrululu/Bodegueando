@@ -12,6 +12,8 @@ import {
   beneficioTokenAddress,
   invoiceEscrowAbi,
   invoiceEscrowAddress,
+  rewardsCatalogAbi,
+  rewardsCatalogAddress,
 } from "@/lib/contracts";
 import { RISK_COLOR, RISK_LABEL, confianzaLabel, type AiRecommendation } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -79,6 +81,21 @@ export function BodegaOwnerPanel() {
   const [proposeConfirmed, setProposeConfirmed] = useState(false);
   const [claimingInvoiceId, setClaimingInvoiceId] = useState<number | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
+  const [rewardTitle, setRewardTitle] = useState("");
+  const [rewardKind, setRewardKind] = useState<"Instant" | "Raffle">("Instant");
+  const [rewardCostPuntos, setRewardCostPuntos] = useState("100");
+  const [rewardAvailableDays, setRewardAvailableDays] = useState("30");
+  const [rewardClaimWindowHours, setRewardClaimWindowHours] = useState("24");
+  const [isCreatingReward, setIsCreatingReward] = useState(false);
+  const [createRewardError, setCreateRewardError] = useState<string | null>(null);
+  const [createRewardConfirmed, setCreateRewardConfirmed] = useState(false);
+  const [togglingRewardId, setTogglingRewardId] = useState<number | null>(null);
+  const [drawingRewardId, setDrawingRewardId] = useState<number | null>(null);
+  const [rewardActionError, setRewardActionError] = useState<string | null>(null);
+  const [redeemCodeInput, setRedeemCodeInput] = useState("");
+  const [isValidatingCode, setIsValidatingCode] = useState(false);
+  const [validateError, setValidateError] = useState<string | null>(null);
+  const [validateConfirmed, setValidateConfirmed] = useState(false);
   const [beneficiaryCodeInput, setBeneficiaryCodeInput] = useState("");
   const [beneficiaryAddress, setBeneficiaryAddress] = useState<Address | undefined>(undefined);
   const [isResolvingBeneficiary, setIsResolvingBeneficiary] = useState(false);
@@ -240,6 +257,128 @@ export function BodegaOwnerPanel() {
       setClaimError("No se pudo reclamar la garantía. Revisa que ya haya vencido el plazo.");
     } finally {
       setClaimingInvoiceId(null);
+    }
+  }
+
+  const rewardCountQuery = useReadContract({
+    address: rewardsCatalogAddress,
+    abi: rewardsCatalogAbi,
+    functionName: "nextRewardId",
+    query: { enabled: Boolean(rewardsCatalogAddress) },
+  });
+  const rewardCount = Number((rewardCountQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const rewardsQuery = useReadContracts({
+    contracts: Array.from({ length: rewardCount }, (_, i) => ({
+      address: rewardsCatalogAddress,
+      abi: rewardsCatalogAbi,
+      functionName: "rewards",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(rewardsCatalogAddress) && rewardCount > 0 },
+  });
+
+  const REWARD_KIND_LABEL = ["Instantáneo", "Sorteo"];
+  const myRewards = (rewardsQuery.data ?? [])
+    .map((result, i) => {
+      if (result.status !== "success") return null;
+      const [rBodega, title, kind, pointCost, availableUntil, claimWindowSeconds, active, drawn, winner] = result.result as [
+        Address,
+        string,
+        number,
+        bigint,
+        bigint,
+        bigint,
+        boolean,
+        boolean,
+        Address,
+      ];
+      return { id: i, bodega: rBodega, title, kind, pointCost, availableUntil, claimWindowSeconds, active, drawn, winner };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .filter((r) => address && r.bodega.toLowerCase() === (address as string).toLowerCase())
+    .reverse();
+
+  async function handleCreateReward() {
+    if (!rewardsCatalogAddress || !smartAccountClient || !address || !rewardTitle.trim()) return;
+    setIsCreatingReward(true);
+    setCreateRewardError(null);
+    setCreateRewardConfirmed(false);
+    try {
+      const pointCostWei = parseEther(rewardCostPuntos || "0");
+      const availableUntil = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, Math.round(Number(rewardAvailableDays || "0"))) * 86400);
+      const claimWindowSeconds = BigInt(Math.max(1, Math.round(Number(rewardClaimWindowHours || "0"))) * 3600);
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: rewardsCatalogAddress,
+          abi: rewardsCatalogAbi,
+          functionName: "createReward",
+          args: [rewardTitle.trim(), rewardKind === "Instant" ? 0 : 1, pointCostWei, availableUntil, claimWindowSeconds],
+        },
+      ]);
+      setCreateRewardConfirmed(true);
+      setRewardTitle("");
+      rewardCountQuery.refetch();
+      rewardsQuery.refetch();
+    } catch {
+      setCreateRewardError("No se pudo crear el beneficio. Intenta de nuevo.");
+    } finally {
+      setIsCreatingReward(false);
+    }
+  }
+
+  async function handleToggleRewardActive(id: number, currentActive: boolean) {
+    if (!rewardsCatalogAddress || !smartAccountClient || !address) return;
+    setTogglingRewardId(id);
+    setRewardActionError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: rewardsCatalogAddress, abi: rewardsCatalogAbi, functionName: "setRewardActive", args: [BigInt(id), !currentActive] },
+      ]);
+      rewardsQuery.refetch();
+    } catch {
+      setRewardActionError("No se pudo actualizar el beneficio. Intenta de nuevo.");
+    } finally {
+      setTogglingRewardId(null);
+    }
+  }
+
+  async function handleDrawWinner(id: number) {
+    if (!rewardsCatalogAddress || !smartAccountClient || !address) return;
+    setDrawingRewardId(id);
+    setRewardActionError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: rewardsCatalogAddress, abi: rewardsCatalogAbi, functionName: "drawWinner", args: [BigInt(id)] },
+      ]);
+      rewardsQuery.refetch();
+    } catch {
+      setRewardActionError("No se pudo sortear todavía. Revisa que ya haya pasado la fecha límite y que haya participantes.");
+    } finally {
+      setDrawingRewardId(null);
+    }
+  }
+
+  async function handleValidateCode() {
+    if (!rewardsCatalogAddress || !smartAccountClient || !address || !redeemCodeInput.trim()) return;
+    setIsValidatingCode(true);
+    setValidateError(null);
+    setValidateConfirmed(false);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: rewardsCatalogAddress,
+          abi: rewardsCatalogAbi,
+          functionName: "fulfillRedemption",
+          args: [BigInt(redeemCodeInput.trim())],
+        },
+      ]);
+      setValidateConfirmed(true);
+      setRedeemCodeInput("");
+    } catch {
+      setValidateError("Código inválido, vencido, o ya entregado.");
+    } finally {
+      setIsValidatingCode(false);
     }
   }
 
@@ -846,6 +985,134 @@ export function BodegaOwnerPanel() {
               {claimError && <p className="text-xs text-red-500">{claimError}</p>}
             </div>
           )}
+        </section>
+      )}
+
+      {rewardsCatalogAddress && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Mi catálogo de beneficios</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Armá lo que quieras dar a cambio de PUNTOS — un producto (arroz, gaseosa) o un
+            sorteo para una fecha especial (aniversario, Navidad, Día de la Madre). Cualquier
+            cliente de la red puede canjearlo, no solo el que compró en tu bodega.
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <input
+              value={rewardTitle}
+              onChange={(e) => setRewardTitle(e.target.value)}
+              placeholder="Ej: 1kg de arroz, o Canasta navideña"
+              className="rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setRewardKind("Instant")}
+                className={`flex-1 rounded-xl border px-3 py-2 text-xs font-medium ${rewardKind === "Instant" ? "border-black/35 bg-[#c9e26514]" : "border-black/15"}`}
+              >
+                Canje directo
+              </button>
+              <button
+                type="button"
+                onClick={() => setRewardKind("Raffle")}
+                className={`flex-1 rounded-xl border px-3 py-2 text-xs font-medium ${rewardKind === "Raffle" ? "border-black/35 bg-[#c9e26514]" : "border-black/15"}`}
+              >
+                Sorteo
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-[#6b6d64]">Costo en PUNTOS</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="1"
+                value={rewardCostPuntos}
+                onChange={(e) => setRewardCostPuntos(e.target.value)}
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-[#6b6d64]">
+                {rewardKind === "Instant" ? "Disponible por (días)" : "Cierra el sorteo en (días)"}
+              </span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                step="1"
+                value={rewardAvailableDays}
+                onChange={(e) => setRewardAvailableDays(e.target.value)}
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-[#6b6d64]">Código de canje válido por (horas)</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                step="1"
+                value={rewardClaimWindowHours}
+                onChange={(e) => setRewardClaimWindowHours(e.target.value)}
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+              />
+            </div>
+            <button onClick={handleCreateReward} disabled={isCreatingReward || !rewardTitle.trim()} className={primaryButtonClass} style={primaryButtonStyle}>
+              {isCreatingReward ? "Creando..." : "Publicar beneficio"}
+            </button>
+            {createRewardError && <p className="text-xs text-red-500">{createRewardError}</p>}
+            {createRewardConfirmed && <p className="text-xs text-green-600">¡Listo! Ya está en el catálogo ✓</p>}
+          </div>
+
+          {myRewards.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-[#0a0a0b]">Tus beneficios publicados</p>
+              {myRewards.map((r) => (
+                <div key={r.id} className={highlightBoxClass}>
+                  <p className="text-sm font-medium text-[#0a0a0b]">{r.title}</p>
+                  <p className="text-xs text-[#6b6d64]">
+                    {REWARD_KIND_LABEL[r.kind]} · {(Number(r.pointCost) / 1e18).toFixed(0)} PUNTOS · {r.active ? "activo" : "pausado"}
+                    {r.kind === 1 && r.drawn ? " · sorteado" : ""}
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      onClick={() => handleToggleRewardActive(r.id, r.active)}
+                      disabled={togglingRewardId === r.id}
+                      className={outlineButtonClass}
+                    >
+                      {togglingRewardId === r.id ? "..." : r.active ? "Pausar" : "Reactivar"}
+                    </button>
+                    {r.kind === 1 && !r.drawn && (
+                      <button onClick={() => handleDrawWinner(r.id)} disabled={drawingRewardId === r.id} className={outlineButtonClass}>
+                        {drawingRewardId === r.id ? "Sorteando..." : "Sortear ganador (si ya cerró)"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {rewardActionError && <p className="text-xs text-red-500">{rewardActionError}</p>}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2 border-t border-black/10 pt-3">
+            <label htmlFor="redeemCode" className="text-sm font-medium text-[#0a0a0b]">
+              Validar canje en el mostrador
+            </label>
+            <input
+              id="redeemCode"
+              inputMode="numeric"
+              value={redeemCodeInput}
+              onChange={(e) => setRedeemCodeInput(e.target.value)}
+              placeholder="Código de 6 dígitos que te muestra el cliente"
+              className={inputClass}
+            />
+            <button onClick={handleValidateCode} disabled={isValidatingCode || !redeemCodeInput.trim()} className={outlineButtonClass}>
+              {isValidatingCode ? "Validando..." : "Entregar beneficio"}
+            </button>
+            {validateError && <p className="text-xs text-red-500">{validateError}</p>}
+            {validateConfirmed && <p className="text-xs text-green-600">¡Listo! Canje entregado ✓</p>}
+          </div>
         </section>
       )}
 

@@ -4,6 +4,7 @@ import PuntosTokenArtifact from "./abis/PuntosToken.json";
 import FiadoScoringArtifact from "./abis/FiadoScoring.json";
 import BeneficioTokenArtifact from "./abis/BeneficioToken.json";
 import InvoiceEscrowArtifact from "./abis/InvoiceEscrow.json";
+import RewardsCatalogArtifact from "./abis/RewardsCatalog.json";
 
 /**
  * Contract addresses come from env vars, filled in after deploying with
@@ -27,12 +28,15 @@ export const beneficioTokenAddress = process.env
   .NEXT_PUBLIC_BENEFICIO_TOKEN_ADDRESS as `0x${string}` | undefined;
 export const invoiceEscrowAddress = process.env
   .NEXT_PUBLIC_INVOICE_ESCROW_ADDRESS as `0x${string}` | undefined;
+export const rewardsCatalogAddress = process.env
+  .NEXT_PUBLIC_REWARDS_CATALOG_ADDRESS as `0x${string}` | undefined;
 
 export const paymentRouterAbi = PaymentRouterArtifact.abi;
 export const puntosTokenAbi = PuntosTokenArtifact.abi;
 export const fiadoScoringAbi = FiadoScoringArtifact.abi;
 export const beneficioTokenAbi = BeneficioTokenArtifact.abi;
-// Cast to Abi: useReadContracts (used for the invoice list in BodegaOwnerPanel/BuyerPanel)
+// Cast to Abi: useReadContracts (used for the invoice/reward list in BodegaOwnerPanel/BuyerPanel)
 // needs each contract entry's abi to satisfy viem's Abi type, which the plain JSON import's
 // widened string-literal types (e.g. `type: string` instead of `type: "function"`) don't.
 export const invoiceEscrowAbi = InvoiceEscrowArtifact.abi as Abi;
+export const rewardsCatalogAbi = RewardsCatalogArtifact.abi as Abi;

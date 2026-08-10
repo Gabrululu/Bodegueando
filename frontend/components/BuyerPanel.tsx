@@ -12,6 +12,10 @@ import {
   beneficioTokenAddress,
   invoiceEscrowAbi,
   invoiceEscrowAddress,
+  rewardsCatalogAbi,
+  rewardsCatalogAddress,
+  puntosTokenAbi,
+  puntosTokenAddress,
 } from "@/lib/contracts";
 import { confianzaLabel } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -299,6 +303,126 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       setInvoiceActionError("No se pudo pagar esta factura. Intenta de nuevo.");
     } finally {
       setRepayingInvoiceId(null);
+    }
+  }
+
+  const rewardCountQuery = useReadContract({
+    address: rewardsCatalogAddress,
+    abi: rewardsCatalogAbi,
+    functionName: "nextRewardId",
+    query: { enabled: Boolean(rewardsCatalogAddress) },
+  });
+  const rewardCount = Number((rewardCountQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const rewardsQuery = useReadContracts({
+    contracts: Array.from({ length: rewardCount }, (_, i) => ({
+      address: rewardsCatalogAddress,
+      abi: rewardsCatalogAbi,
+      functionName: "rewards",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(rewardsCatalogAddress) && rewardCount > 0 },
+  });
+
+  const allRewards = (rewardsQuery.data ?? [])
+    .map((result, i) => {
+      if (result.status !== "success") return null;
+      const [rBodega, title, kind, pointCost, availableUntil, , active, drawn] = result.result as [
+        Address,
+        string,
+        number,
+        bigint,
+        bigint,
+        bigint,
+        boolean,
+        boolean,
+        Address,
+      ];
+      return { id: i, bodega: rBodega, title, kind, pointCost, availableUntil, active, drawn };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .filter((r) => r.active && (r.kind === 0 || !r.drawn))
+    .reverse();
+
+  const [bodegaCodesByAddress, setBodegaCodesByAddress] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const uncached = Array.from(new Set(allRewards.map((r) => r.bodega.toLowerCase()))).filter((a) => !(a in bodegaCodesByAddress));
+    if (uncached.length === 0) return;
+    uncached.forEach((bodegaAddr) => {
+      fetch("/api/bodega/code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: bodegaAddr }),
+      })
+        .then((res) => res.json())
+        .then((data) => setBodegaCodesByAddress((prev) => ({ ...prev, [bodegaAddr]: data.code ?? "?" })))
+        .catch(() => setBodegaCodesByAddress((prev) => ({ ...prev, [bodegaAddr]: "?" })));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allRewards.map((r) => r.bodega).join(",")]);
+
+  const redemptionCountQuery = useReadContract({
+    address: rewardsCatalogAddress,
+    abi: rewardsCatalogAbi,
+    functionName: "nextRedemptionId",
+    query: { enabled: Boolean(rewardsCatalogAddress) },
+  });
+  const redemptionCount = Number((redemptionCountQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const redemptionsQuery = useReadContracts({
+    contracts: Array.from({ length: redemptionCount }, (_, i) => ({
+      address: rewardsCatalogAddress,
+      abi: rewardsCatalogAbi,
+      functionName: "redemptions",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(rewardsCatalogAddress) && redemptionCount > 0 },
+  });
+
+  const myRedemptions = (redemptionsQuery.data ?? [])
+    .map((result, i) => {
+      if (result.status !== "success") return null;
+      const [rewardId, customer, code, expiresAt, fulfilled] = result.result as [bigint, Address, bigint, bigint, boolean];
+      return { id: i, rewardId: Number(rewardId), customer, code, expiresAt, fulfilled };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .filter((r) => address && r.customer.toLowerCase() === (address as string).toLowerCase())
+    .reverse();
+
+  const [redeemingRewardId, setRedeemingRewardId] = useState<number | null>(null);
+  const [rewardActionError, setRewardActionError] = useState<string | null>(null);
+
+  async function handleRedeemInstant(id: number, pointCost: bigint) {
+    if (!rewardsCatalogAddress || !puntosTokenAddress || !smartAccountClient || !address) return;
+    setRedeemingRewardId(id);
+    setRewardActionError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: puntosTokenAddress, abi: puntosTokenAbi, functionName: "approve", args: [rewardsCatalogAddress, pointCost] },
+        { address: rewardsCatalogAddress, abi: rewardsCatalogAbi, functionName: "redeemInstant", args: [BigInt(id)] },
+      ]);
+      redemptionCountQuery.refetch();
+      redemptionsQuery.refetch();
+    } catch {
+      setRewardActionError("No se pudo canjear. Revisa que tengas suficientes PUNTOS.");
+    } finally {
+      setRedeemingRewardId(null);
+    }
+  }
+
+  async function handleEnterRaffle(id: number, pointCost: bigint) {
+    if (!rewardsCatalogAddress || !puntosTokenAddress || !smartAccountClient || !address) return;
+    setRedeemingRewardId(id);
+    setRewardActionError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: puntosTokenAddress, abi: puntosTokenAbi, functionName: "approve", args: [rewardsCatalogAddress, pointCost] },
+        { address: rewardsCatalogAddress, abi: rewardsCatalogAbi, functionName: "enterRaffle", args: [BigInt(id)] },
+      ]);
+    } catch {
+      setRewardActionError("No se pudo participar. Revisa que tengas suficientes PUNTOS.");
+    } finally {
+      setRedeemingRewardId(null);
     }
   }
 
@@ -640,6 +764,50 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
             </div>
           ))}
           {invoiceActionError && <p className="text-xs text-red-500">{invoiceActionError}</p>}
+        </section>
+      )}
+
+      {isConnected && rewardsCatalogAddress && myRedemptions.length > 0 && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Mis canjes</h2>
+          <p className="text-xs text-[#6b6d64]">Mostrale este código al bodeguero para retirar tu beneficio.</p>
+          {myRedemptions.map((r) => (
+            <div key={r.id} className={highlightBoxClass}>
+              <p className="text-center text-3xl font-semibold tracking-widest text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+                {r.fulfilled ? "Entregado ✓" : String(r.code)}
+              </p>
+              {!r.fulfilled && (
+                <p className="mt-1 text-center text-xs text-[#6b6d64]">
+                  Válido hasta {new Date(Number(r.expiresAt) * 1000).toLocaleString("es-PE")}
+                </p>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {isConnected && rewardsCatalogAddress && allRewards.length > 0 && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Catálogo de beneficios</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Canjeá tus PUNTOS en cualquier bodega de la red, no solo donde los ganaste.
+          </p>
+          {allRewards.map((r) => (
+            <div key={r.id} className={highlightBoxClass}>
+              <p className="text-sm font-medium text-[#0a0a0b]">{r.title}</p>
+              <p className="text-xs text-[#6b6d64]">
+                {(Number(r.pointCost) / 1e18).toFixed(0)} PUNTOS · bodega #{bodegaCodesByAddress[r.bodega.toLowerCase()] ?? "…"}
+              </p>
+              <button
+                onClick={() => (r.kind === 0 ? handleRedeemInstant(r.id, r.pointCost) : handleEnterRaffle(r.id, r.pointCost))}
+                disabled={redeemingRewardId === r.id}
+                className={`${outlineButtonClass} mt-2`}
+              >
+                {redeemingRewardId === r.id ? "Enviando..." : r.kind === 0 ? "Canjear" : "Participar del sorteo"}
+              </button>
+            </div>
+          ))}
+          {rewardActionError && <p className="text-xs text-red-500">{rewardActionError}</p>}
         </section>
       )}
 

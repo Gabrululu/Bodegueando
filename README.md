@@ -41,6 +41,7 @@ bodegueando/
 | **PuntosPaymaster** | `0x138572e9A1c858D2759e60f46586D36e974FBcEd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x138572e9A1c858D2759e60f46586D36e974FBcEd#code) |
 | **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
 | **InvoiceEscrow** (fiado con garantía parcial) | `0x8fe870ac497708E8a123e8083f3AF32cf5b6C645` | [ver código verificado](https://sepolia.arbiscan.io/address/0x8fe870ac497708E8a123e8083f3AF32cf5b6C645#code) |
+| **RewardsCatalog** (catálogo de beneficios) | `0x6151F3CD52680E0e31bBc75c763414E8d8c70b97` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6151F3CD52680E0e31bBc75c763414E8d8c70b97#code) |
 
 `FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
 fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `PuntosPaymaster`
@@ -277,6 +278,67 @@ El camino feliz completo (repago total libera toda la garantía) y el reclamo co
 para devolver al cliente ya están cubiertos por los tests locales, así que esta corrida se
 enfocó en encadenar propose → accept → repago parcial → reclamo acotado con ETH real
 moviéndose en Arbitrum Sepolia.
+
+### RewardsCatalog — catálogo de beneficios canjeables entre bodegas
+
+Hasta acá `PuntosToken` solo se ganaba como cashback y se gastaba en gas — no había forma de
+canjearlo por algo concreto. `RewardsCatalog.sol` agrega esa pieza: cada bodega arma su propio
+catálogo de beneficios, pagado en PUNTOS por cualquier cliente de la red, sin importar en qué
+bodega los ganó.
+
+- **`createReward(title, kind, pointCost, availableUntil, claimWindowSeconds)`** — cualquier
+  bodega registrada en `PaymentRouter` publica un beneficio propio. `kind` es `Instant` (ej.
+  "1kg de arroz") o `Raffle` (ej. "canasta navideña"). La bodega decide dos ventanas de tiempo
+  independientes: `availableUntil` (hasta cuándo se ofrece/se puede seguir participando) y
+  `claimWindowSeconds` (cuánto dura el código de canje una vez generado — no es un fijo de
+  15 minutos, cada bodega elige el suyo por beneficio).
+- **`redeemInstant(id)`** — el cliente paga `pointCost` PUNTOS (transferidos directo a la
+  bodega, no se queman) y recibe un código de 6 dígitos de una sola vez, válido por
+  `claimWindowSeconds`.
+- **`enterRaffle(id)`** — paga `pointCost` por cada entrada; puede entrar más de una vez para
+  más chances. **`drawWinner(id)`** — solo la bodega dueña, solo después de `availableUntil`:
+  elige un ganador con `keccak256(blockhash, timestamp, id)` (aleatoriedad on-chain acotada,
+  manipulable en un grado limitado por quien propone el bloque — aceptable para un sorteo de
+  bajo valor, no amerita un oráculo VRF externo) y le genera su propio código de canje.
+- **`fulfillRedemption(code)`** — la bodega dueña del beneficio valida en el mostrador el
+  código que le muestra el cliente y lo marca entregado. Los PUNTOS ya se cobraron al
+  participar, así que esta función solo cambia estado, nunca mueve fondos — nadie puede
+  "reservar" sin comprometerse.
+
+`PuntosToken` es un ERC-20 estándar sin restricciones de transferencia, así que
+`approve`+`transferFrom` funcionan sin modificarlo. El `approve` hacia `RewardsCatalog` se
+batchea junto con el canje en un solo `UserOperation` (`sendAndWait`,
+`frontend/lib/smartAccount.ts`), igual que ya hace ese mismo helper con el `approve` del
+paymaster — una sola firma, sin pasos extra para quien no sabe qué es un "approve".
+
+Cubierto con 23 tests unitarios nuevos en Foundry (creación gateada a bodegas registradas,
+cobro y generación de código en `redeemInstant`, código vencido/ya usado/de otra bodega
+rechazados, entradas de sorteo acumulables, `drawWinner` fallando antes de tiempo y sin
+participantes, pausa de beneficios) — 66/66 en todo el repo, sin romper nada existente.
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia** (dirección en la tabla de
+arriba). Corrida real de punta a punta (la bodega de siempre y dos wallets de cliente
+descartables recién creadas, cada una pagándole a la bodega primero para tener PUNTOS de
+cashback reales con qué canjear):
+
+1. Ambos clientes pagan a la bodega (0.003 ETH cada uno) y ganan `0.00006 PUNTOS` de cashback.
+2. La bodega publica un beneficio `Instant` ("1kg de arroz") por un tercio del balance de un
+   cliente. Ese cliente canjea
+   ([tx `0x39e506...`](https://sepolia.arbiscan.io/tx/0x39e5066601d2163cbdc4b7e0a3ec27d5da3101ee8d59c789b45cf2e46361455a))
+   y recibe el código `464290`. La bodega lo valida en el mostrador
+   ([tx `0x7c62db...`](https://sepolia.arbiscan.io/tx/0x7c62dbfdbaa5a52deea41dcede912542e02fd9ac5a3a1f0f9e9822b6692d5a37)):
+   `fulfilled` pasa de `false` a `true`.
+3. La bodega publica un beneficio `Raffle` ("Canasta navideña") que cierra en 60 segundos.
+   Los dos clientes entran (`enterRaffle`, pagando PUNTOS cada uno). Pasado el cierre, la
+   bodega sortea
+   ([tx `0x6d7962...`](https://sepolia.arbiscan.io/tx/0x6d7962aa0e8f6565127dc1de5a93c39bbbeddacee0d8f3b3a22648306b4b2af2)):
+   sale un ganador real de entre los dos entrantes, con su propio código de canje generado
+   automáticamente. La bodega lo valida igual que el canje instantáneo
+   ([tx `0xbb76e9...`](https://sepolia.arbiscan.io/tx/0xbb76e94beaff4844d2df1a24e7dc3fc962b73264ee24ffef882b2218dcb69105)).
+
+El camino de "código vencido" y "código ya usado" ya están cubiertos por los tests locales,
+así que esta corrida se enfocó en probar los dos tipos de beneficio completos (canje directo
+y sorteo con ganador real) con PUNTOS reales ganados por un pago real, no minteados a mano.
 
 ### Circuit breaker on-chain para el oráculo de IA (probado en vivo)
 
@@ -729,6 +791,9 @@ marca qué parte de esto ya está construido y probado en testnet.
      producción en testnet, no es "próxima fase").
    - `InvoiceEscrow.sol` — fiado con garantía parcial, opción adicional junto al fiado sin
      garantía de siempre (desplegado, verificado y probado en vivo — ver "InvoiceEscrow").
+   - `RewardsCatalog.sol` — catálogo de beneficios canjeables por PUNTOS, propio de cada
+     bodega y canjeable en cualquier bodega de la red (desplegado, verificado y probado en
+     vivo — ver "RewardsCatalog").
 4. **Backend y servicios** — API que orquesta creación de smart account, llamadas a
    contratos, scoring y notificaciones; base de datos para perfil/catálogo/métricas y
    cache de saldos para que la UX se sienta instantánea; motor de riesgo off-chain
@@ -780,6 +845,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
 | Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
 | `InvoiceEscrow` (fiado con garantía parcial) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (11/11 Rust, 43/43 Solidity) — ver "InvoiceEscrow" |
+| `RewardsCatalog` (catálogo de beneficios canjeables entre bodegas) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (23/23 Solidity, 66/66 en todo el repo) — ver "RewardsCatalog" |
 | Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
 | `ePEN` (token propio, redimible 1:1 por soles reales) | 🔜 Roadmap — hoy la app solo convierte el monto a soles para mostrarlo (ver "Atajos"); un `ePEN` real necesitaría un emisor regulado que respalde cada token con soles en custodia (como una stablecoin bancaria), que es un problema de compliance y de rampas fiat, no solo de contrato. Construir el contrato ERC-20 en sí es trivial; lo que falta es esa pieza, y no vale la pena simularla con una paridad falsa que parezca más sólida de lo que es |
 | Score crediticio del bodeguero con Zero-Knowledge (no del cliente — del propio negocio) | 🔜 Roadmap — hoy el historial on-chain demuestra si los *clientes* de una bodega pagan bien; falta la pieza inversa, que el bodeguero use ese mismo historial de ventas para probarle su propia solidez a un banco/proveedor sin entregarle el detalle de sus ventas. Necesita una prueba ZK sobre los datos ya on-chain (ej. "mis ventas superan X" sin revelar la cifra exacta) — es la pieza que falta para que el historial sea útil también *hacia afuera*, no solo hacia sus propios clientes |
@@ -888,6 +954,16 @@ PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> FIADO_SCORING_ADDRESS=<direcci
   forge script script/DeployInvoiceEscrow.s.sol:DeployInvoiceEscrow \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 # después: cast send <FiadoScoringAddress> "setEscrow(address)" <InvoiceEscrowAddress> ...
+```
+
+Deploy de `RewardsCatalog` (requiere `PaymentRouter` y `PuntosToken` ya desplegados; a
+diferencia de `InvoiceEscrow` no necesita wiring posterior en ningún otro contrato):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployRewardsCatalog.s.sol:DeployRewardsCatalog \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
 
 ### Contrato Stylus (FiadoScoring)
