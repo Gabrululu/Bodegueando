@@ -130,6 +130,11 @@ cuatro pilares:
    bodega llega a barrios y familias donde el comercio formal grande nunca abre una sucursal —
    es, sin quererlo, la red de distribución social más grande y más cercana que ya existe.
 
+Sobre estos cuatro pilares ya se construyó una capa adicional — fiado con garantía parcial,
+catálogo de beneficios canjeables, compras conjuntas entre bodegas, y un certificado de
+crédito con Zero-Knowledge que se puede usar para pedir un préstamo on-chain — ver "Ya
+construido, más allá del pitch original" más abajo.
+
 Empieza en la bodega porque ahí el problema es más urgente y más visible — pero fidelizar sin
 depender de nadie más y construir un historial que hoy no existe no es un problema exclusivo
 de las bodegas. Es el de cualquier persona que emprende de cero.
@@ -176,12 +181,19 @@ verificados en la red Arbitrum (Sepolia), y ya publicado en producción.
   Ethereum — clave para que cobrar S/ 5 nunca cueste más que eso en comisión de red.
 - **Arbitrum Stylus (Rust)** para el contrato de scoring de fiado — el cálculo del historial de
   pagos es una operación matemática que conviene correr en WASM, no en EVM puro.
-  Solidity para el resto: pagos, puntos y el token de programas sociales.
+  Solidity para el resto: pagos, puntos, fiado con garantía parcial, catálogo de beneficios,
+  compras conjuntas entre bodegas, certificado de crédito y línea de crédito, y el token de
+  programas sociales.
+- **Circom + snarkjs (Groth16)** para el certificado de crédito con Zero-Knowledge del
+  bodeguero: prueba "mi score ≥ X" sin revelar el score exacto, verificada por un contrato
+  Solidity autogenerado — el mismo stack que ya corre en producción, no un plan a futuro.
 - **Cuentas inteligentes (ERC-4337)** en vez de wallets tradicionales: el usuario entra con su
   celular o correo (Privy), y el gas de sus transacciones se paga con sus propios puntos —
   nunca necesita ETH ni entender qué es "el gas".
 - **Inteligencia artificial (Claude, de Anthropic)** analiza el historial on-chain de cada
-  bodega y sugiere un ajuste de su límite de fiado, explicándolo en español simple.
+  bodega y sugiere un ajuste de su límite de fiado, explicándolo en español simple, acotada por
+  un circuit breaker on-chain que le impide proponer más del doble de lo que el historial real
+  justifica.
 - **Todo en soles**, nunca en criptomonedas — la conversión pasa por debajo, invisible para
   el usuario.
 
@@ -191,45 +203,64 @@ verificados en la red Arbitrum (Sepolia), y ya publicado en producción.
 entre este proyecto y un demo de hackathon típico: acá hay evidencia real, no solo una
 promesa.)*
 
-- Contratos **desplegados y verificados en Arbitrum Sepolia**, con código fuente legible en el
-  explorador — nada oculto.
+- **Nueve contratos desplegados y verificados en Arbitrum Sepolia** — pagos, puntos, scoring
+  de fiado, fiado con garantía parcial, catálogo de beneficios, compras conjuntas entre
+  bodegas, certificado de crédito ZK y línea de crédito que lo consume — todos con código
+  fuente legible en el explorador, nada oculto.
 - **Transacciones reales de punta a punta**, probadas en vivo: un pago real, un fiado real
   otorgado y pagado de vuelta, un ajuste de IA aceptado y otro rechazado por el propio sistema
-  por proponer un salto injustificado.
+  por proponer un salto injustificado, una factura con garantía parcial reclamada al
+  vencimiento, un sorteo de beneficios con ganador real, un pedido grupal financiado entre
+  bodegas, y un préstamo con garantía reducida gracias a una prueba ZK real generada y
+  verificada on-chain.
 - **Aplicación en producción**, no solo en un entorno de pruebas — accesible hoy mismo desde
   el celular.
-- Durante las pruebas con datos reales aparecieron dos problemas genuinos de diseño del
-  sistema de gas — **se encontraron y se corrigieron en vivo**, con la corrección igual de
-  probada que el resto. Eso no es un detalle menor: es la diferencia entre un producto que
-  se probó de verdad y uno que solo se mostró una vez.
+- Durante las pruebas con datos reales aparecieron problemas genuinos de diseño (el sistema de
+  gas, primero; después el faucet y el manejo de roles) — **se encontraron y se corrigieron en
+  vivo**, con la corrección igual de probada que el resto. Eso no es un detalle menor: es la
+  diferencia entre un producto que se probó de verdad y uno que solo se mostró una vez.
+
+### Ya construido, más allá del pitch original
+
+Lo de arriba fue el punto de partida del hackathon. Desde entonces se sumó una capa completa
+sobre el mismo historial on-chain — no es visión, ya está desplegado, verificado y probado
+con transacciones reales en Arbitrum Sepolia:
+
+- **Score crediticio del bodeguero, con Zero-Knowledge — ya construido.** El bodeguero genera
+  un certificado ("mi score ≥ 700") sin revelar la cifra exacta, firmado por un oráculo y
+  verificado por un contrato Solidity autogenerado (Circom + snarkjs). Un banco lo valida en
+  un click, sin exponer las ventas reales línea por línea.
+- **Línea de crédito on-chain que consume ese certificado — ya construida.** Con el
+  certificado, la bodega pide prestado de un pool compartido con menos garantía cuanto mejor
+  el score probado (hasta 50% menos que sin certificado) — probado en vivo con un préstamo
+  real, repagado con interés.
+- **Fiado con garantía parcial (`InvoiceEscrow`) — ya construido.** Para montos donde la
+  bodega prefiere pedir un depósito en vez de fiar solo en base a confianza, junto al fiado
+  sin garantía que ya existía.
+- **Compras conjuntas entre bodegas (`GroupOrders`) — ya construido.** Varias bodegas juntan
+  su demanda hasta alcanzar el pedido mínimo de un distribuidor, en vez de negociar cada una
+  por separado o quedarse sin ese producto.
+- **Catálogo de beneficios canjeables (`RewardsCatalog`) — ya construido.** Cada bodega arma
+  su propio catálogo (canje directo o sorteo), pagado en los mismos puntos de cashback,
+  canjeable en cualquier bodega de la red.
+- **Mapa de bodegas cercanas — ya construido.** El cliente ve en un mapa real las bodegas de
+  su zona y paga directo desde el pin, sin necesitar el código a mano.
 
 ### Roadmap: lo que sigue
 
-Lo construido hoy ya funciona de punta a punta, pero es la base de una visión más grande —
-todo pensado para empoderar al bodeguero, no solo para digitalizar lo que ya hacía. Y aunque
-hoy arranca en la bodega, la misma infraestructura no tiene por qué quedarse ahí: cualquier
-emprendedor sin historial formal —del rubro que sea— tiene exactamente el mismo problema.
+Con esa capa ya construida, lo que queda pendiente depende de terceros, no de más ingeniería:
 
-- **Score crediticio del propio bodeguero, con Zero-Knowledge.** Hoy el historial on-chain
-  demuestra si *sus clientes* pagan bien. El siguiente paso es que el bodeguero use ese mismo
-  historial de ventas para demostrar *su propia* solidez financiera frente a un banco, una
-  microfinanciera o un proveedor — sin tener que entregarles sus ventas reales, línea por
-  línea. Con una prueba de conocimiento cero (ZK) puede probar un enunciado verdadero sobre su
-  historial ("mis ventas superan tal umbral", "mi puntaje de confianza es mayor a tal número")
-  sin revelar los datos sensibles detrás — información que hoy nadie comparte precisamente
-  porque compartirla es un riesgo, no un beneficio.
-- **Compras conjuntas entre bodegas.** Muchas bodegas, sobre todo las más alejadas, pierden
-  ventas simplemente porque el distribuidor no llega hasta donde están, o el pedido mínimo es
-  más grande de lo que una sola bodega necesita. Bodegueando puede coordinar pedidos grupales
-  entre bodegas cercanas — juntan su demanda, alcanzan el mínimo, y todas reciben mercadería
-  que solas no podrían pedir.
-- **eSol real y rampas con soles de verdad.** Hoy el pago usa ETH de testnet como stand-in;
-  el camino a producción implica una rampa real entre soles y saldo dentro de la app (Yape,
-  efectivo), y eventualmente `InvoiceEscrow` (fiado con garantía) para montos más grandes.
+- **Notificaciones por WhatsApp**, junto a Telegram (que ya funciona hoy) — pendiente de
+  aprobación de permisos de Meta Business API.
+- **eSol real y rampas con soles de verdad.** Hoy el pago usa ETH de testnet como stand-in; el
+  camino a producción implica una rampa real entre soles y saldo dentro de la app (Yape,
+  efectivo) y un `ePEN` respaldado 1:1 por un emisor regulado — un problema de compliance y
+  rampas fiat, no de contrato.
 
-*(Nota de diseño: esta slide puede ser una línea de tiempo simple de tres etapas, o tres
-tarjetas — cada idea con un ícono, sin necesitar mockups todavía, porque nada de este bloque
-está construido: es a propósito la visión, no una demo.)*
+*(Nota de diseño: la primera sección puede ser una grilla de tarjetas ya "con check" — cada
+una con su ícono y una transacción real de Arbiscan como prueba, reforzando "Prueba de que
+funciona". La segunda sección sí puede ser una línea de tiempo simple, porque ahí sí falta
+trabajo por delante.)*
 
 ### El equipo
 
@@ -277,7 +308,9 @@ párrafos completos.
 ---
 
 *Generado a partir del código real de la marca (`frontend/app/page.tsx`, `frontend/app/layout.tsx`,
-`frontend/public/logo-mark.svg`) y del estado real del proyecto al 2026-08-08, no de una
-descripción genérica. Cifras de mercado (bodegas en Perú, participación de Sip en el mercado
-de billeteras) verificadas por búsqueda web el mismo día — fuentes: Asociación de Bodegueros del Perú (ABP,
-vía La República/Andina), INEI (Censo Económico), Kantar y Statista.*
+`frontend/public/logo-mark.svg`) y del estado real del proyecto, actualizado al 2026-08-10 para
+reflejar las funcionalidades sumadas desde el pitch original (InvoiceEscrow, RewardsCatalog,
+GroupOrders, CreditCertificate, CreditLine, mapa de bodegas). Cifras de mercado (bodegas en
+Perú, participación de Sip en el mercado de billeteras) verificadas por búsqueda web el
+2026-08-08 — fuentes: Asociación de Bodegueros del Perú (ABP, vía La República/Andina), INEI
+(Censo Económico), Kantar y Statista.*

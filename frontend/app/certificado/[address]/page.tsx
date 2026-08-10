@@ -55,7 +55,7 @@ export default async function CertificadoPage({ params }: { params: Promise<{ ad
               Bodegueando
             </h1>
           </div>
-          <p className="text-[#55564f]">Certificado de crédito con Zero-Knowledge</p>
+          <p className="text-[#55564f]">Certificado de crédito verificado</p>
         </div>
 
         <div className="w-full rounded-[20px] border border-black/10 bg-[#fffffc] p-6 shadow-sm">
@@ -63,7 +63,7 @@ export default async function CertificadoPage({ params }: { params: Promise<{ ad
             <>
               <p className="text-2xl font-semibold text-green-600">✅ Certificado válido</p>
               <p className="mt-2 text-[#0a0a0b]">
-                Esta bodega probó, sin revelar la cifra exacta, que su score de crédito on-chain
+                Esta bodega probó, sin revelar la cifra exacta, que su score de crédito
                 es <span className="font-semibold">≥ {threshold.toString()}</span> (de 1000).
               </p>
               {expiresAt && (
@@ -75,16 +75,15 @@ export default async function CertificadoPage({ params }: { params: Promise<{ ad
           ) : (
             <>
               <p className="text-2xl font-semibold text-[#8f9189]">Sin certificado vigente</p>
-              <p className="mt-2 text-[#0a0a0b]">Esta dirección no tiene un certificado de crédito ZK vigente ahora mismo.</p>
+              <p className="mt-2 text-[#0a0a0b]">Esta dirección no tiene un certificado de crédito vigente ahora mismo.</p>
             </>
           )}
           <p className="mt-4 break-all text-xs text-[#8f9189]">{address}</p>
         </div>
 
         <p className="text-xs text-[#6b6d64]">
-          Verificado leyendo directo del contrato en Arbitrum Sepolia — la prueba se generó con
-          un circuito Circom/Groth16 que verifica una firma del oráculo sin exponer el score
-          real. No hace falta wallet para ver esta página.
+          Verificado directo desde la blockchain (Arbitrum) — confirma que el dato es cierto sin
+          mostrar el número real. No hace falta tener una cuenta para ver esta página.
         </p>
       </main>
     </div>

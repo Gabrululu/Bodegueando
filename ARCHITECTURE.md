@@ -1,0 +1,1278 @@
+# Bodegueando — Arquitectura técnica
+
+Este documento cubre la arquitectura completa: contratos, mecanismos, direcciones
+desplegadas, tests, corridas en vivo, y cómo levantar y desplegar cada pieza. Para la
+visión de producto — qué construimos, por qué Arbitrum, el problema que resuelve y su
+impacto — ver el [README](./README.md).
+
+## Arquitectura
+
+```
+bodegueando/
+├── contracts/
+│   ├── solidity/                     # Foundry — PaymentRouter, PuntosToken, y el resto de contratos Solidity
+│   ├── stylus-fiado-scoring/         # Arbitrum Stylus (Rust) — FiadoScoring
+│   └── circom-credit-certificate/    # Circom/snarkjs — circuito ZK de CreditCertificate
+└── frontend/                         # Next.js + Tailwind + wagmi/viem
+```
+
+- **PaymentRouter.sol / PuntosToken.sol** (Solidity/Foundry): reciben el pago de un
+  cliente hacia una bodega, otorgan cashback en `PUNTOS` (ERC-20), y registran el pago
+  en `FiadoScoring`. También expone `payFiado`, para que un cliente pague de vuelta una
+  deuda de fiado (sin cashback, porque no es una compra nueva).
+- **FiadoScoring** (Rust/Stylus): mantiene un buffer acotado de los últimos pagos por
+  bodega y calcula un score/límite de crédito heurístico (promedio móvil de pagos,
+  frecuencia, penalización por mora) — el cómputo pesado que justifica usar Stylus en
+  vez de Solidity puro. También expone `updateScoreFromAi` para que el módulo de IA
+  del frontend pueda ajustar el score con una recomendación externa, y un libro de
+  deuda real por cliente (`extendFiado`/`repayFiado`) — ver "Fiado con libro de deuda
+  real" más abajo.
+- **Frontend** (Next.js): conecta ambos contratos vía wagmi/viem. La ruta
+  `app/api/fiado-score/route.ts` lee el historial on-chain de una bodega, llama a la
+  API de Anthropic (Claude) para obtener una recomendación de score/límite, y la
+  escribe de vuelta on-chain.
+
+## Contratos desplegados (Arbitrum Sepolia)
+
+| Contrato | Dirección | Arbiscan |
+|---|---|---|
+| **FiadoScoring** (Stylus/Rust) | `0x22FD7ED957b356dcF4a93574D24fC724736480B2` | [ver / verificado](https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2) |
+| **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
+| **PaymentRouter** | `0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd#code) |
+| **PuntosPaymaster** | `0x138572e9A1c858D2759e60f46586D36e974FBcEd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x138572e9A1c858D2759e60f46586D36e974FBcEd#code) |
+| **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
+| **InvoiceEscrow** (fiado con garantía parcial) | `0x8fe870ac497708E8a123e8083f3AF32cf5b6C645` | [ver código verificado](https://sepolia.arbiscan.io/address/0x8fe870ac497708E8a123e8083f3AF32cf5b6C645#code) |
+| **RewardsCatalog** (catálogo de beneficios) | `0x6151F3CD52680E0e31bBc75c763414E8d8c70b97` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6151F3CD52680E0e31bBc75c763414E8d8c70b97#code) |
+| **GroupOrders** (compras conjuntas entre bodegas) | `0xC765E6Dd487DD03BEEcf81dF1dE6d051Fa35fcf8` | [ver código verificado](https://sepolia.arbiscan.io/address/0xC765E6Dd487DD03BEEcf81dF1dE6d051Fa35fcf8#code) |
+| **CreditCertificate** | `0xc42547586FbEfCA3D8EA189B1e87a2c234f67828` | [ver código verificado](https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code) |
+| **Groth16Verifier** (verificador ZK, autogenerado) | `0x6a61e780f9a811eA28718146A9B2F720C19359fb` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code) |
+| **CreditLine** | `0x3BE8E82DECDCf04f4AEE5dc0507eb9EdC24A4Ba9` | [ver código verificado](https://sepolia.arbiscan.io/address/0x3BE8E82DECDCf04f4AEE5dc0507eb9EdC24A4Ba9#code) |
+
+`FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
+fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `PuntosPaymaster`
+no cambiaron — se reusaron tal cual (el minter de `PuntosToken` se re-vinculó al `PaymentRouter`
+nuevo). El `aiOracle` del `FiadoScoring` nuevo se volvió a autorizar con la misma cuenta que
+tenía el anterior.
+
+`FiadoScoring` se redesplegó una segunda vez el mismo día para agregar el circuit breaker del
+oráculo de IA (ver "Circuit breaker on-chain para el oráculo de IA" más abajo). Esta vez
+`PaymentRouter` **no** cambió — solo se le pidió que apunte a la `FiadoScoring` nueva con
+`setFiadoScoring` (función que ya existía, `onlyOwner`), sin redesplegarlo ni tocar su
+verificación.
+
+`BeneficioToken` se desplegó el 2026-08-08, apuntando al `PaymentRouter` existente como su
+único `IBodegaRegistry` (no crea un segundo registro de bodegas). Su `owner` era originalmente
+la cuenta deployer; ese mismo día se transfirió (`transferOwnership`) a la smart account de
+quien opera los programas sociales desde su sesión logueada — ver "`BeneficioToken.sol`" más
+abajo para el detalle de cómo se calculó esa dirección y el hash de la transacción.
+
+`PaymentRouter` se redesplegó una tercera vez el mismo día para arreglar un bug real
+descubierto en vivo: una bodega se queda sin PUNTOS para pagar gas después de su primera
+transacción gratis (ver "Login sin wallet..." más abajo, sección "Bug real encontrado en
+vivo"). `PuntosToken`, `FiadoScoring` y `PuntosPaymaster` no cambiaron en ese redeploy — se
+reusaron tal cual, con el mismo relinkeo de minter que en el redeploy anterior.
+`BeneficioToken.setBodegaRegistry` también necesita apuntar al `PaymentRouter` nuevo; como su
+`owner` ya no es la cuenta deployer (ver arriba), esa actualización quedó como una acción de
+un clic en el panel de administrador en vez de un `cast send` — solo quien tenga esa sesión la
+puede autorizar.
+
+`PuntosPaymaster` se redesplegó ese mismo día, aparte, por un segundo bug relacionado pero
+distinto: `_postOp` marcaba una cuenta como "ya usó su transacción gratis" sin fijarse si esa
+transacción había tenido éxito o revertido — así que el primer intento fallido de cualquiera
+(no solo bodegas; cualquier comprador cuyo primer pago fallara por el motivo que sea) quemaba
+igual el bootstrap y la dejaba sin PUNTOS para reintentar. Ver "Bug real encontrado en vivo"
+en la misma sección de abajo para el detalle. Reusa el mismo `PuntosToken` de siempre; el
+depósito de gas en el EntryPoint es nuevo (0.02 ETH), el del paymaster viejo queda huérfano.
+
+`FiadoScoring` se redesplegó una tercera vez el 2026-08-10 para agregar `escrow`/
+`extendFiadoFor` (ver "InvoiceEscrow" más abajo) — necesario porque es un contrato Stylus
+inmutable, así que sumarle un método nuevo no tiene otra forma. Esto resetea el
+score/historial/deuda de todas las cuentas (datos de demo, no reales). `PaymentRouter` se
+reconectó a la instancia nueva con `setFiadoScoring` (sin redesplegarse), y el `aiOracle` se
+volvió a autorizar con la misma cuenta de siempre. `InvoiceEscrow` se desplegó por primera vez
+apuntando a este `FiadoScoring` nuevo y al `PaymentRouter` existente (como `IBodegaRegistry`,
+mismo patrón que `BeneficioToken`), y quedó autorizado en `FiadoScoring.setEscrow`.
+
+`PuntosToken`, `PaymentRouter`, `PuntosPaymaster` y `BeneficioToken` están verificados con código fuente Solidity legible en
+Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
+`cargo stylus verify` — no muestra código fuente como Etherscan, pero prueba que el
+bytecode desplegado corresponde a un build reproducible de `src/lib.rs` dentro del
+contenedor Docker oficial de cargo-stylus.
+
+## Demo end-to-end
+
+Dos vistas separadas, no una pantalla única que muestra u oculta secciones:
+
+- **`BuyerPanel.tsx`** (comprador): buscar una bodega por su código, ver su fiado
+  disponible si lo activó (solo lectura) y pagarle vía `PaymentRouter.receivePayment`.
+  También muestra su propio código (para que una bodega le fíe a él) y, si tiene una
+  deuda de fiado con la bodega que está mirando (`FiadoScoring.getFiadoDebt`), un
+  botón para pagarla vía `PaymentRouter.payFiado`.
+- **`BodegaOwnerPanel.tsx`** (bodeguero): su propio código para compartir con
+  clientes, el interruptor de fiado (`setFiadoEnabled`), un botón para recalcular
+  su fiado con IA (`/api/fiado-score`) — esto ya no lo puede disparar un comprador —
+  y un formulario para fiarle a un cliente específico por su código
+  (`FiadoScoring.extendFiado`), con la deuda total pendiente de cobro y el espacio
+  disponible para seguir fiando.
+
+`app/page.tsx` detecta el rol solo: después del login (ver "Login sin wallet" abajo), lee
+`PaymentRouter.isBodega(direcciónDeLaSmartAccount)` y muestra el panel que corresponde. Por
+defecto todos entran como comprador (fricción cero para pagar); un link chico "¿Tienes una
+bodega? Regístrala aquí" dispara `registerSelf()` y recién ahí cambia al panel de bodeguero —
+no hay una pantalla de elección forzada ni un selector manual, cada persona usa su propia
+cuenta real (teléfono/correo).
+
+**El fiado es opt-in por bodega, no automático.** En la vida real una bodega no
+siempre fía — es decisión del dueño ("hoy no se fía, mañana sí"). `fiado_enabled`
+en `FiadoScoring` arranca en `false` para todas las bodegas y solo la bodega misma
+puede prenderlo (`setFiadoEnabled`, escrito por `msg.sender`, sin lista de permisos
+aparte). El historial de pagos y el score se siguen calculando siempre — así una
+bodega ya tiene track record el día que decide activarlo. Mientras está apagado, el
+cliente no ve nada de fiado en la app, solo puede pagar.
+
+Corrida real contra los contratos desplegados arriba (bodega de prueba, un pago de
+0.0001 ETH registrado, fiado todavía sin activar):
+
+| | Valor |
+|---|---|
+| `getScore` | 425 / 1000 (el historial se calculó igual) |
+| `isFiadoEnabled` | `false` (nadie ve el panel de fiado hasta que la bodega lo prenda) |
+
+Y el control de acceso del toggle, probado con `cast`: firmar `setFiadoEnabled(true)`
+con una clave que no es la de esa bodega solo prende el flag *de esa otra cuenta*,
+nunca el de la bodega que se está mirando — cada quien controla únicamente su propio
+fiado.
+
+La ruta de IA (`/api/fiado-score`, `claude-opus-5`, salida estructurada) y la escritura
+on-chain vía `updateScoreFromAi` ya se probaron end-to-end en una corrida anterior:
+Claude devolvió una recomendación más conservadora que la heurística ("*solo un pago
+no es historial suficiente*") y quedó confirmada on-chain. Esa prueba corrió contra el
+`FiadoScoring` anterior (antes de agregar el toggle de fiado); la mecánica es idéntica
+en el contrato actual.
+
+### Fiado con libro de deuda real: `extendFiado` / `repayFiado` / `payFiado`
+
+Hasta acá, `getCreditLimit` era solo un techo sugerido por bodega — nada registraba cuánto de
+ese fiado ya se le había dado a un cliente en concreto, ni si lo había pagado de vuelta.
+`FiadoScoring` ahora lleva ese libro de deuda real:
+
+- **`extendFiado(cliente, monto)`** — la bodega (`msg.sender`, mismo patrón que
+  `setFiadoEnabled`) le fía a un cliente específico. No mueve dinero: es la promesa de que el
+  cliente se lleva algo ahora y paga después. Falla si el fiado está apagado para esa bodega o
+  si supera el espacio disponible (`credit_limit - total_outstanding` de esa misma bodega).
+- **`repayFiado(bodega, cliente, monto)`** — restringida a `payment_router`, igual que
+  `recordPayment`, porque el ETH real ya se movió en `PaymentRouter.payFiado` antes de esta
+  llamada. Si el cliente paga de más, el descuento se limita a la deuda pendiente (sin
+  underflow ni revert).
+- **`PaymentRouter.payFiado(bodega)`** — función `payable`: el comprador manda el ETH
+  (equivalente a los soles que está pagando), se transfiere a la bodega igual que
+  `receivePayment`, pero **no** otorga cashback (pagar una deuda no es una compra nueva) y
+  llama a `repayFiado` en vez de `recordPayment`.
+- **`getFiadoDebt(bodega, cliente)`**, **`getAvailableFiado(bodega)`**,
+  **`getTotalOutstanding(bodega)`** — nuevas vistas que usa el frontend: `BodegaOwnerPanel`
+  muestra cuánto fiado ya dio (pendiente de cobro) y cuánto espacio le queda, y le permite
+  fiarle a un cliente por su código de 6 dígitos; `BuyerPanel` muestra su propio código (mismo
+  sistema de `lib/bodegaCodes.ts`, ya genérico por dirección — no hizo falta construir uno
+  nuevo) para dárselo a su bodega, y si tiene una deuda con la bodega que está mirando, puede
+  pagarla ahí mismo.
+
+Cubierto con tests unitarios en ambos contratos: `cargo test` (Rust, 6/6, incluyendo límite
+excedido, fiado apagado, y que solo `payment_router` puede llamar `repayFiado`) y
+`forge test` (Solidity, 17/17, incluyendo transferencia de fondos, ausencia de cashback, y
+sobrepago).
+
+**Redesplegado y verificado en Arbitrum Sepolia** (direcciones nuevas en la tabla de arriba):
+`FiadoScoring` vía `cargo stylus deploy` + `cargo stylus verify --deployment-tx` (reproducible,
+Docker), `PaymentRouter` vía `RedeployPaymentRouter.s.sol --verify` (reusa el `PuntosToken`
+existente), reconectados con `setPaymentRouter` y con el `aiOracle` reautorizado en el contrato
+nuevo. Nota para quien repita este deploy: `cargo stylus deploy --constructor-args` tiene
+`allow_hyphen_values` activado en cargo-stylus 0.10.8, así que se traga cualquier flag que venga
+después como si fuera otro argumento del constructor — `--constructor-args` tiene que ir **al
+final** del comando.
+
+**Corrida real de punta a punta contra los contratos nuevos** (dos cuentas reales, no
+simuladas: la bodega de prueba de siempre y una wallet de cliente descartable recién creada
+para esta corrida):
+
+1. El cliente le paga a la bodega el equivalente a 0.0002 ETH vía `receivePayment`
+   ([tx `0x518765...`](https://sepolia.arbiscan.io/tx/0x518765873e416fe33fb92c34d49298e6c1c1f65b2f4f68c182c767d8d63f656d)) —
+   recibe cashback en `PUNTOS` automáticamente (`4e12` wei, exactamente 2% = `cashbackBps`
+   por defecto).
+2. La bodega activa fiado (`setFiadoEnabled(true)`) y, con el historial ya acumulado
+   (`getScore` = 702, `getCreditLimit` ≈ 0.0004212 ETH), le fía al cliente el 40% de su
+   límite disponible: `extendFiado(cliente, 0.00016848 ETH)`
+   ([tx `0xaff74d...`](https://sepolia.arbiscan.io/tx/0xaff74d8dc46c8f0ee58a9aaec74399694210a091801831e2d2560151ac0c92b5)).
+   `getFiadoDebt(bodega, cliente)` pasa de `0` a `168480000000000` wei on-chain.
+3. El cliente paga una parte de su deuda con `payFiado`
+   ([tx `0xf889c9...`](https://sepolia.arbiscan.io/tx/0xf889c985d7c7ce0b0cf19ecdc1761f37a2b2bbb15d631e28b97a43f4d551300a)):
+   la deuda baja de `168480000000000` a `68480000000000` wei — el descuento parcial funciona
+   igual en vivo que en los tests.
+4. El cliente paga el resto con un segundo `payFiado`
+   ([tx `0xbc496a...`](https://sepolia.arbiscan.io/tx/0xbc496afbfc85eca5641513c074adc98051dd56567f056ed2ad00ebb67b1edb40)):
+   `getFiadoDebt` vuelve a `0`, `getTotalOutstanding` vuelve a `0`, y
+   `getAvailableFiado` vuelve al límite completo (`421200000000000` wei) — el espacio de
+   crédito se libera exactamente como debería.
+
+El sobrepago y el control de acceso de `repayFiado` (solo `payment_router`) ya están cubiertos
+por los tests locales, así que esta corrida se enfocó en probar el camino feliz completo con
+ETH real moviéndose entre dos cuentas distintas en Arbitrum Sepolia.
+
+### InvoiceEscrow — fiado con garantía parcial
+
+`extendFiado` es fiado 100% no garantizado: la bodega fía sin que el cliente deposite nada,
+limitado solo por su `credit_limit`. `InvoiceEscrow.sol` es una vía **adicional** (no
+reemplaza `extendFiado`) para montos donde una bodega prefiere pedir un depósito parcial en
+vez de fiar solo en base a confianza:
+
+- **`proposeInvoice(cliente, principal, garantía, vencimiento)`** — la bodega (verificada
+  contra `PaymentRouter.isBodega`) propone una factura. No mueve fondos ni deuda todavía.
+- **`acceptInvoice(id)`** (`payable`, `msg.value` = garantía exacta) — el cliente acepta y
+  deposita la garantía, que el contrato retiene. Atómicamente llama a la nueva
+  `FiadoScoring.extendFiadoFor(bodega, cliente, principal)`, así que esta deuda cuenta para
+  el mismo score/historial que el fiado sin garantía.
+- **`repayInvoice(id)`** (`payable`, pagos parciales permitidos) — reenvía el ETH a la bodega
+  y llama a `repayFiado`, igual que `PaymentRouter.payFiado`. Al llegar al principal completo,
+  devuelve toda la garantía al cliente.
+- **`claimCollateral(id)`** — pasado el vencimiento con saldo pendiente, la bodega reclama
+  `min(faltante, garantía)`, se descuenta de la deuda on-chain, y el sobrante (si queda) vuelve
+  al cliente.
+
+Para que `extendFiadoFor` y el `repayFiado` que dispara `claimCollateral`/`repayInvoice`
+cuenten como llamadas confiables, `FiadoScoring` (Rust/Stylus) ganó una segunda dirección de
+confianza, `escrow` (seteable solo por su owner con `setEscrow`, mismo patrón que
+`payment_router`), y un nuevo método `extendFiadoFor(bodega, cliente, monto)` restringido a
+esa dirección — exactamente la misma lógica que `extendFiado`, solo que `bodega` es un
+parámetro en vez de `msg.sender`. Como es un contrato Stylus inmutable, agregar esto obligó a
+**redesplegarlo en una dirección nueva**, perdiendo el score/historial de la corrida de arriba
+(datos de demo, no reales).
+
+Cubierto con tests unitarios en ambos contratos: `cargo test` (Rust, 11/11, incluyendo que
+`extend_fiado_for`/`repay_fiado` solo aceptan al `escrow` configurado) y `forge test`
+(Solidity, 14/14 nuevos sobre `InvoiceEscrow` — propuesta/cancelación, garantía exacta,
+repago parcial vs. total, reclamo antes/después del vencimiento, reclamo acotado a la garantía
+disponible — más los 29 tests preexistentes sin romperse, 43/43 en total).
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia** (direcciones nuevas en la
+tabla de arriba). Corrida real de punta a punta contra los contratos nuevos (la cuenta
+deployer actuando como bodega — ya registrada en `PaymentRouter` de antes — y una wallet de
+cliente descartable recién creada para esta corrida, igual que en "Fiado con libro de deuda
+real"):
+
+1. La bodega construye historial (un pago de 0.002 ETH a sí misma vía `receivePayment`) para
+   tener `getCreditLimit` > 0 en el `FiadoScoring` recién desplegado (arranca en cero, como
+   toda cuenta en un contrato nuevo), y activa `setFiadoEnabled(true)`.
+2. Propone una factura por el 25% de su límite (`0.0006375 ETH`) con 30% de garantía
+   (`0.00019125 ETH`) y vencimiento a 75 segundos
+   ([tx `0x3a678c...`](https://sepolia.arbiscan.io/tx/0x3a678c96308323c8571bf977a1278b3a8de3139d302ecd7662c7bff69be1bd15)).
+3. El cliente acepta y deposita la garantía
+   ([tx `0xf3a87b...`](https://sepolia.arbiscan.io/tx/0xf3a87b966e10024e521b6a68143c0028be2d551c1222f5e1df31c8fd7f432639)):
+   `getFiadoDebt(bodega, cliente)` pasa de `0` a `637500000000000` wei — el mismo ledger que
+   usa el fiado sin garantía, actualizado por `extendFiadoFor`.
+4. El cliente repaga un tercio del principal
+   ([tx `0x2d632c...`](https://sepolia.arbiscan.io/tx/0x2d632cb0fdb80fce3a97ab0dfea667577431e52102d7a1ff82cc2d6993496c87)):
+   la deuda baja a `425000000000000` wei, la factura sigue `Active` y la garantía completa
+   sigue retenida (no se libera con pagos parciales, solo al llegar al principal completo).
+5. Pasado el vencimiento sin el resto del pago, la bodega reclama
+   ([tx `0xd2c985...`](https://sepolia.arbiscan.io/tx/0xd2c9853707b9fce8493053d0f98bb3e6477db1adf154a6a9b822e12603dc444c)):
+   el faltante (`425000000000000` wei) supera la garantía disponible
+   (`191250000000000` wei), así que el reclamo se acota a la garantía completa — exactamente
+   el comportamiento que cubre `test_ClaimCapsAtCollateralWhenShortfallExceedsIt`. La deuda
+   baja a `233750000000000` wei, la factura queda `Defaulted` y su `collateral` en `0`.
+
+El camino feliz completo (repago total libera toda la garantía) y el reclamo con sobrante
+para devolver al cliente ya están cubiertos por los tests locales, así que esta corrida se
+enfocó en encadenar propose → accept → repago parcial → reclamo acotado con ETH real
+moviéndose en Arbitrum Sepolia.
+
+### RewardsCatalog — catálogo de beneficios canjeables entre bodegas
+
+Hasta acá `PuntosToken` solo se ganaba como cashback y se gastaba en gas — no había forma de
+canjearlo por algo concreto. `RewardsCatalog.sol` agrega esa pieza: cada bodega arma su propio
+catálogo de beneficios, pagado en PUNTOS por cualquier cliente de la red, sin importar en qué
+bodega los ganó.
+
+- **`createReward(title, kind, pointCost, availableUntil, claimWindowSeconds)`** — cualquier
+  bodega registrada en `PaymentRouter` publica un beneficio propio. `kind` es `Instant` (ej.
+  "1kg de arroz") o `Raffle` (ej. "canasta navideña"). La bodega decide dos ventanas de tiempo
+  independientes: `availableUntil` (hasta cuándo se ofrece/se puede seguir participando) y
+  `claimWindowSeconds` (cuánto dura el código de canje una vez generado — no es un fijo de
+  15 minutos, cada bodega elige el suyo por beneficio).
+- **`redeemInstant(id)`** — el cliente paga `pointCost` PUNTOS (transferidos directo a la
+  bodega, no se queman) y recibe un código de 6 dígitos de una sola vez, válido por
+  `claimWindowSeconds`.
+- **`enterRaffle(id)`** — paga `pointCost` por cada entrada; puede entrar más de una vez para
+  más chances. **`drawWinner(id)`** — solo la bodega dueña, solo después de `availableUntil`:
+  elige un ganador con `keccak256(blockhash, timestamp, id)` (aleatoriedad on-chain acotada,
+  manipulable en un grado limitado por quien propone el bloque — aceptable para un sorteo de
+  bajo valor, no amerita un oráculo VRF externo) y le genera su propio código de canje.
+- **`fulfillRedemption(code)`** — la bodega dueña del beneficio valida en el mostrador el
+  código que le muestra el cliente y lo marca entregado. Los PUNTOS ya se cobraron al
+  participar, así que esta función solo cambia estado, nunca mueve fondos — nadie puede
+  "reservar" sin comprometerse.
+
+`PuntosToken` es un ERC-20 estándar sin restricciones de transferencia, así que
+`approve`+`transferFrom` funcionan sin modificarlo. El `approve` hacia `RewardsCatalog` se
+batchea junto con el canje en un solo `UserOperation` (`sendAndWait`,
+`frontend/lib/smartAccount.ts`), igual que ya hace ese mismo helper con el `approve` del
+paymaster — una sola firma, sin pasos extra para quien no sabe qué es un "approve".
+
+Cubierto con 23 tests unitarios nuevos en Foundry (creación gateada a bodegas registradas,
+cobro y generación de código en `redeemInstant`, código vencido/ya usado/de otra bodega
+rechazados, entradas de sorteo acumulables, `drawWinner` fallando antes de tiempo y sin
+participantes, pausa de beneficios) — 66/66 en todo el repo, sin romper nada existente.
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia** (dirección en la tabla de
+arriba). Corrida real de punta a punta (la bodega de siempre y dos wallets de cliente
+descartables recién creadas, cada una pagándole a la bodega primero para tener PUNTOS de
+cashback reales con qué canjear):
+
+1. Ambos clientes pagan a la bodega (0.003 ETH cada uno) y ganan `0.00006 PUNTOS` de cashback.
+2. La bodega publica un beneficio `Instant` ("1kg de arroz") por un tercio del balance de un
+   cliente. Ese cliente canjea
+   ([tx `0x39e506...`](https://sepolia.arbiscan.io/tx/0x39e5066601d2163cbdc4b7e0a3ec27d5da3101ee8d59c789b45cf2e46361455a))
+   y recibe el código `464290`. La bodega lo valida en el mostrador
+   ([tx `0x7c62db...`](https://sepolia.arbiscan.io/tx/0x7c62dbfdbaa5a52deea41dcede912542e02fd9ac5a3a1f0f9e9822b6692d5a37)):
+   `fulfilled` pasa de `false` a `true`.
+3. La bodega publica un beneficio `Raffle` ("Canasta navideña") que cierra en 60 segundos.
+   Los dos clientes entran (`enterRaffle`, pagando PUNTOS cada uno). Pasado el cierre, la
+   bodega sortea
+   ([tx `0x6d7962...`](https://sepolia.arbiscan.io/tx/0x6d7962aa0e8f6565127dc1de5a93c39bbbeddacee0d8f3b3a22648306b4b2af2)):
+   sale un ganador real de entre los dos entrantes, con su propio código de canje generado
+   automáticamente. La bodega lo valida igual que el canje instantáneo
+   ([tx `0xbb76e9...`](https://sepolia.arbiscan.io/tx/0xbb76e94beaff4844d2df1a24e7dc3fc962b73264ee24ffef882b2218dcb69105)).
+
+El camino de "código vencido" y "código ya usado" ya están cubiertos por los tests locales,
+así que esta corrida se enfocó en probar los dos tipos de beneficio completos (canje directo
+y sorteo con ganador real) con PUNTOS reales ganados por un pago real, no minteados a mano.
+
+### GroupOrders — compras conjuntas entre bodegas
+
+Última pieza del roadmap que era puramente técnica (no bloqueada por un tercero como Meta o
+un emisor regulado): una bodega alejada suele perder ventas porque el distribuidor no llega
+hasta ella, o porque el pedido mínimo que exige es más de lo que una sola bodega necesita.
+`GroupOrders.sol` deja que varias bodegas junten demanda hasta ese mínimo — bodega↔bodega,
+a diferencia de `InvoiceEscrow`/`RewardsCatalog` que son bodega↔cliente, así que esto solo
+vive en `BodegaOwnerPanel.tsx`, nada en `BuyerPanel.tsx`.
+
+- **`createGroupOrder(title, goal, pledgeDeadline, withdrawWindowSeconds)`** — cualquier
+  bodega registrada organiza un pedido grupal con una meta en ETH (stand-in de eSol, igual
+  que el resto de la app), hasta cuándo se puede aportar, y cuánto plazo de gracia tiene ella
+  misma para retirar una vez alcanzada la meta.
+- **`pledge(id)`** (`payable`) — cualquier bodega registrada aporta antes del cierre. Queda
+  registrado por bodega (no anónimo) — ese registro es lo que se usa fuera de la cadena para
+  repartir la mercadería proporcionalmente a lo que aportó cada una.
+- **`withdraw(id)`** — solo la organizadora, solo si ya cerró el período de aportes, se
+  alcanzó la meta, y todavía está dentro del plazo de gracia. Se lleva el fondo completo para
+  comprarle al distribuidor en la vida real (el distribuidor no es un actor on-chain).
+- **`refund(id)`** — cualquier bodega que aportó reclama su parte de vuelta si el pedido nunca
+  alcanzó la meta, o si la alcanzó pero la organizadora dejó vencer el plazo de gracia sin
+  retirar — el fondo nunca queda atrapado para siempre.
+
+Qué NO resuelve, a propósito: no modela unidades ni catálogo de productos (`goal` es un
+monto, no una cantidad de sacos de arroz — mismo criterio que `BeneficioToken.sol` para no
+simular un catálogo que no existe en el resto de la app), y no filtra por cercanía geográfica
+(no hay geolocalización en ningún lugar del proyecto, así que el descubrimiento de pedidos
+grupales es una lista global, no "bodegas cercanas").
+
+Cubierto con 19 tests unitarios nuevos en Foundry (creación/aporte gateados a bodegas
+registradas, retiro antes de tiempo/antes de meta/fuera de plazo revierten, retiro exitoso
+transfiere todo el fondo y bloquea reembolsos después, reembolso por meta no alcanzada,
+reembolso por plazo de gracia vencido sin retiro, doble reembolso revierte) — 85/85 en todo
+el repo.
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia** (dirección en la tabla de
+arriba). Corrida real con la bodega de siempre como organizadora y dos wallets de bodega
+descartables recién registradas (`registerSelf`) aportando, cubriendo los dos desenlaces
+posibles:
+
+1. **Meta alcanzada**: pedido por 0.002 ETH, dos bodegas aportan 0.0012 y 0.0008 ETH
+   ([tx `0x84d436...`](https://sepolia.arbiscan.io/tx/0x84d436612861e841cb26810f7d3a3f798695903cc660092d459d85a27c410289)
+   y [tx `0xc752b7...`](https://sepolia.arbiscan.io/tx/0xc752b799b0e40a6076e4388aa7c4030348d7998eb471fc4d3b66574f43b3a803))
+   hasta juntar exactamente los 0.002 ETH. Cerrado el período de aportes, la organizadora
+   retira ([tx `0xfb5536...`](https://sepolia.arbiscan.io/tx/0xfb5536870592938aa020f98c3e43b8eb7e06f4a7b7ee235907738ac32a2666b2)):
+   recibe el fondo completo, `withdrawn` pasa a `true`.
+2. **Meta no alcanzada**: un segundo pedido por 0.01 ETH solo recibe 0.001 ETH de aporte
+   ([tx `0x8cb7e7...`](https://sepolia.arbiscan.io/tx/0x8cb7e75f81bde9168e702a351a78e57946cd74618d851e8867e6dfa9c143748f)).
+   Pasado el cierre sin alcanzar la meta, esa bodega reclama su reembolso
+   ([tx `0x1e69c9...`](https://sepolia.arbiscan.io/tx/0x1e69c9bc3bb968e56ec25d07ec1d4f14c9f5dba79e9a23522765d375788708c2)):
+   recupera exactamente lo que aportó.
+
+El camino de "plazo de gracia vencido sin retiro" ya está cubierto por los tests locales, así
+que esta corrida se enfocó en los dos desenlaces principales (meta alcanzada vs. no
+alcanzada) con ETH real moviéndose entre tres cuentas distintas en Arbitrum Sepolia.
+
+### CreditCertificate — certificado de crédito con Zero-Knowledge
+
+Última pieza del roadmap: "score crediticio del bodeguero con Zero-Knowledge". Investigamos
+la fuente que motivó esto — el blog de investigación ZK de Offchain Labs (el equipo detrás
+de Arbitrum) — y vale aclarar qué encontramos ahí: es investigación a **nivel de protocolo**
+(cómo Arbitrum prueba su propia transición de estado con una arquitectura multi-prover que
+combina fraud proofs, ZK vía SP1/Succinct, y TEEs; WASM→RISC-V como ISA de entrega), no una
+guía de desarrollo de aplicaciones. No da nada directamente reusable para esto — lo que sí
+confirma es que un verificador Solidity estándar corre en Arbitrum exactamente igual que en
+cualquier chain EVM, sin nada especial que Arbitrum habilite o bloquee.
+
+`FiadoScoring.getScore`/`getPaymentHistory` ya son públicos — cualquiera los puede leer sin
+ZK. El valor real de la prueba acá no es "ocultar datos que ya son públicos on-chain", son
+dos cosas concretas: (1) una **credencial verificable y portable** ("score ≥ 700" en vez de
+la cifra exacta) que un banco/proveedor puede validar en un click sin entender los contratos
+de Bodegueando, y (2) que esa misma credencial sea **consumible on-chain** — ver
+"CreditLine" más abajo.
+
+**Stack**: Circom + snarkjs (Groth16) — nuevo subproyecto hermano de `contracts/solidity/`/
+`contracts/stylus-fiado-scoring/`: `contracts/circom-credit-certificate/`.
+
+- **El circuito** (`circuits/creditCertificate.circom`) recibe `score` y una firma EdDSA
+  privados, y `threshold`/`bodega`/pubkey-del-oráculo/`issuedAt` públicos. Usa templates ya
+  probados de `circomlib` (`Poseidon`, `EdDSAPoseidonVerifier`, `GreaterEqThan`) — nada de
+  criptografía hecha a mano. Prueba "el oráculo firmó `poseidon(bodega, score, issuedAt)` Y
+  `score >= threshold`" sin que `score` aparezca nunca en las señales públicas.
+- **Trusted setup**: reusa un archivo Powers of Tau ya publicado (ceremonia pública de
+  iden3/Hermez, estándar para circuitos chicos como este) en vez de correr una ceremonia
+  propia — la asunción de confianza real acá es el oráculo centralizado, no el setup.
+- **El oráculo ZK** (`frontend/lib/zkOracle.ts`) firma con una key EdDSA-BabyJubJub
+  (`ZK_ORACLE_PRIVATE_KEY`) — deliberadamente **distinta** de `ORACLE_PRIVATE_KEY` (que es
+  secp256k1, la curva de Ethereum, y no sirve para verificar barato dentro de un circuito).
+  `circomlibjs` firma con exactamente los mismos parámetros que el circuito verifica.
+- **`app/api/credit-certificate/attest`**: lee el score actual de `FiadoScoring` (ya
+  público) y, si supera el threshold pedido, firma la atestación — rechaza firmar si la
+  bodega tiene un default sin resolver en `CreditLine` (ver más abajo).
+- **`app/api/credit-certificate/prove`**: corre `snarkjs.groth16.fullProve` server-side (el
+  wasm + zkey pesan varios MB, no tiene sentido mandárselos al celular del bodeguero) y
+  devuelve la prueba ya formateada como el calldata que espera `submitCertificate`.
+- **`CreditCertificate.sol`** (`Ownable` — a diferencia de los otros contratos de esta
+  sesión, acá sí hace falta un ancla de confianza admin-configurable para la pubkey del
+  oráculo): `submitCertificate` llama al verificador Groth16 autogenerado
+  (`CreditCertificateVerifier.sol`, `snarkjs zkey export solidityverifier`, sin editar a
+  mano), valida que la pubkey coincida con la configurada y que la atestación no sea vieja,
+  y guarda el certificado por 30 días. `getCertifiedThreshold(bodega)` es la vista que
+  `CreditLine.sol` (o cualquier verificador externo) consulta.
+- **`app/certificado/[address]`**: página pública de solo lectura, mismo patrón que
+  `/pagar/[code]` — un banco abre el link y ve "✅ Certificado válido: score ≥ 700, vence
+  el...", leyendo directo del contrato, sin wallet.
+
+Cubierto con: 3 tests del circuito completo (`contracts/circom-credit-certificate/test/`,
+proof real generada y verificada, sin exponer el score; score insuficiente y firma
+incorrecta no pueden generar prueba) y 9 tests Foundry para `CreditCertificate.sol` (con un
+verificador mock, ya que la matemática ZK ya está cubierta a nivel de circuito).
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia** (direcciones en la tabla de
+arriba). Corrida real con la bodega de siempre (score real de 600, construido con pagos
+reales vía `receivePayment`): se generó la atestación firmada, se corrió
+`snarkjs.groth16.fullProve` de verdad contra el circuito compilado, y se envió la prueba
+on-chain pidiendo probar "score ≥ 500"
+([tx `0xa3d4bd...`](https://sepolia.arbiscan.io/tx/0xa3d4bdafb1d39ec2af7c7dbfe257ca38245ea62a83fd91dfc9ade85a72b60fa8)):
+`getCertifiedThreshold` devuelve `500` — el `600` real nunca apareció en ninguna señal
+pública ni en ningún evento.
+
+### CreditLine — línea de crédito on-chain
+
+El certificado ZK no es solo para bancos externos: también es consumible **on-chain**. Una
+bodega con score certificado pide prestado de un pool compartido con **menos garantía
+cuanto mejor el score que probó** — mismo mecanismo de garantía parcial que
+`InvoiceEscrow.sol`, solo que acá el tamaño de la garantía lo decide el score certificado,
+no la bodega.
+
+- **Pool compartido**: `deposit()`/`withdraw(shares)`, cualquiera puede prestar — patrón
+  vault simple (shares proporcionales al valor del pool), sin ERC-4626 completo.
+- **`borrow(amount)`**: solo bodegas registradas con certificado vigente. El % de garantía
+  lo determina el tier certificado (tabla fija: score≥900→15%, ≥700→30%, ≥500→50%).
+- **`repay(loanId)`**: principal + 5% de interés fijo (sin curva dinámica), de una sola vez;
+  devuelve la garantía, lo repagado vuelve al pool.
+- **`liquidate(loanId)`**: pasado el vencimiento sin repago, cualquiera puede ejecutarlo — la
+  garantía pasa al pool (compensa a los lenders) y queda registrado el default.
+
+Deliberadamente **no** es un protocolo de lending completo: sin curva de interés dinámica,
+sin oráculo de precio (todo en la misma moneda eSol/ETH, sin riesgo cross-asset), sin
+instalments. El default no toca `FiadoScoring` on-chain (agregar `CreditLine` como cuarto
+caller autorizado ahí obligaría a redesplegarlo de nuevo, como ya pasó tres veces esta
+sesión) — en cambio, `attest/route.ts` bloquea certificados nuevos mientras haya un default
+sin resolver: consecuencia reputacional real, sin acoplar más contratos entre sí.
+
+Cubierto con 15 tests Foundry (tiers de garantía, retiro insuficiente de liquidez del pool,
+repago correcto/incorrecto, liquidación antes/después del vencimiento, doble resolución).
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia.** Con el certificado de
+arriba ya on-chain, la misma bodega depositó al pool, pidió prestado 0.0006 ETH con el 50%
+de garantía que le exige el tier 500 (0.0003 ETH — la mitad de lo que pediría sin
+certificado)
+([tx `0x8c2f3d...`](https://sepolia.arbiscan.io/tx/0x8c2f3d6b8fcc0faaacda5b13868b47e690b7e2f8b1b31f9d719c6183358e13d4)),
+y lo repagó completo (principal + 5% de interés)
+([tx `0x39b640...`](https://sepolia.arbiscan.io/tx/0x39b640ea3406a89fb7cb855eecb6c84a45d2085fb6588d0e76f5c0d2c1a9681b)):
+recuperó su garantía, el préstamo quedó `resolved`, y el cambio neto en su balance coincidió
+exactamente con lo esperado (`+garantía -deuda`).
+
+**109/109 tests en todo el repo** (Rust + Solidity + circuito) con este agregado.
+
+### Circuit breaker on-chain para el oráculo de IA (probado en vivo)
+
+`app/api/fiado-score/route.ts` firma `updateScoreFromAi` con `ORACLE_PRIVATE_KEY`, una clave
+que vive como variable de entorno en el mismo proceso que sirve la web (ver "Atajos
+conscientes de hackathon" más abajo — es un atajo de hackathon documentado, no una elección de
+producción). Si esa clave se filtra, antes no había ningún límite: quien la tuviera podía
+fijarle a cualquier bodega un límite de fiado inventado, sin ningún historial real detrás.
+
+`FiadoScoring` ahora acota lo que el oráculo puede escribir: el límite que proponga puede ser
+como máximo el doble de lo que el propio heurístico on-chain (el mismo que corre en cada
+`record_payment`) calcularía para esa bodega en este momento. Bajar el límite (ser más
+conservador que el heurístico) sigue sin tope, porque nunca es un riesgo. La matemática del
+heurístico se extrajo a `heuristic_score_and_limit`, una función pura que tanto
+`recompute_heuristic` (la que ya corría en cada pago) como `update_score_from_ai` (la
+validación nueva) comparten — no hay dos cálculos que puedan desincronizarse.
+
+Cubierto con 3 tests nuevos/actualizados en `cargo test` (8/8 en total): que un límite dentro
+del 2× se acepta, que uno muy por encima revierte con `AiLimitOutOfRange`, y que bajar el
+límite sigue siendo libre sin importar el heurístico.
+
+**Corrida real en Arbitrum Sepolia** contra la `FiadoScoring` redesplegada
+(`0x9C6868b6c8521854e65C622a848A2C0C9873b6Df`):
+
+1. Con una bodega sin ningún historial en el contrato nuevo, se intentó
+   `updateScoreFromAi(bodega, 900, 100 ETH)` con la cuenta oracle — revirtió on-chain
+   (`AiLimitOutOfRange`, selector `0x482f64d6`). Ni con la clave del oráculo se puede inventar
+   crédito de la nada.
+2. Un cliente le pagó 0.0002 ETH a la bodega (mismo patrón de siempre), dejando un
+   `heuristic_limit` real de `255000000000000` wei.
+3. `updateScoreFromAi(bodega, 800, 1.5×heuristic_limit)` — aceptado, `getCreditLimit` pasó a
+   `382500000000000` wei.
+4. `updateScoreFromAi(bodega, 900, 3×heuristic_limit)` sobre la misma bodega, ahora con
+   historial real detrás — igual revirtió con el mismo selector. El tope escala con el
+   historial real, nunca lo ignora.
+
+### `BeneficioToken.sol` — PoC de programas sociales on-chain (Vaso de Leche, Qali Warma, Pensión 65)
+
+La razón de que esto tenga sentido en este proyecto específicamente, no como un feature
+genérico pegado encima: ningún supermercado ni farmacia de cadena llega a todos los barrios
+donde sí hay una bodega — eso las convierte, sin que nadie lo haya diseñado así, en la red de
+última milla más grande y más cercana del país. `BeneficioToken` aprovecha esa presencia real
+para que un programa social llegue directo a quien lo necesita, gastable solo en la bodega de
+su barrio, sin intermediarios que se queden con una parte en el camino.
+
+A diferencia de `PuntosToken` (libre, transferible entre cualquiera), `BeneficioToken` es un
+ERC-20 restringido: un beneficiario solo puede gastarlo transfiriéndolo a una bodega ya
+registrada en `PaymentRouter` (nunca revenderlo a otra persona ni cambiarlo por efectivo), y
+cada emisión vence a los `duration` segundos de emitida. La restricción vive en `_update`, el
+hook que ERC20 llama en *toda* transferencia (incluida `transferFrom`) — no hay forma de
+saltársela usando otra función del token.
+
+- **`issue(beneficiario, monto, duración)`** — solo el `owner` (en una integración real, la
+  municipalidad o el ministerio correspondiente) puede emitir beneficio.
+- **`transfer`/`transferFrom` normal** — funciona como "redimir": si el destino no es una
+  bodega registrada (`IBodegaRegistry.isBodega`, la misma fuente de verdad que ya usa
+  `PaymentRouter` — no hay un segundo registro que pueda desincronizarse) o si el beneficio del
+  emisor ya venció, revierte (`NotABodega` / `BenefitExpired`).
+
+**Qué NO resuelve esta PoC, a propósito:** no restringe la categoría del gasto ("solo
+alimentos") porque la app no tiene catálogo de productos — construirlo sería un proyecto
+aparte, no algo que este contrato pueda simular honestamente. Tampoco reclama solo el saldo
+vencido de vuelta al programa (necesitaría un keeper on-chain); el beneficio vencido
+simplemente deja de poder gastarse, se queda congelado en la wallet.
+
+Cubierto con 9 tests en `forge test` (26/26 en todo el repo, sin romper nada existente):
+emisión solo por el owner, vencimiento, gasto válido a una bodega registrada, el intento de
+revender a otra persona (el caso que justifica todo el contrato) revierte, y que
+`transferFrom` (aprobar a un tercero) queda sujeto a las mismas reglas que `transfer` directo.
+
+**Desplegado y verificado en Arbitrum Sepolia**, con una UI mínima de emisión conectada al
+mismo panel que ya usa cualquier bodega (`BodegaOwnerPanel.tsx`) — no un dashboard aparte:
+
+- **Quién puede emitir, de verdad, no solo en la UI.** `issue()` es `onlyOwner` — eso ya se
+  hacía cumplir on-chain desde el diseño original. Lo nuevo es que el panel ahora *lee* ese
+  mismo `owner()` (`useReadContract`, sin variable de entorno separada que pudiera
+  desincronizarse del contrato) y solo muestra la sección "Panel de administrador — Beneficios
+  sociales" a la cuenta que matchea. Nadie más la ve, y aunque alguien manipulara el frontend
+  para forzarla a aparecer, la llamada a `issue()` igual revertiría on-chain para cualquier
+  otra cuenta.
+- **Ya transferido a una sesión real logueada por Privy.** El `owner` original era la cuenta
+  EOA deployer de siempre, y Privy genera una *smart account nueva* por cada login — no existe
+  una forma de "iniciar sesión como" una clave privada externa preexistente a través del flujo
+  normal de la app. La dirección de smart account no se ve en ningún dashboard (ni el de Privy,
+  que solo muestra la wallet embebida que la *firma*, una dirección distinta); se calculó
+  reproduciendo el mismo `toSimpleSmartAccount` que usa `lib/smartAccount.ts` para esa wallet
+  embebida, y se confirmó cruzándola contra el registro real de vinculación de Telegram de esa
+  cuenta antes de transferir. `transferOwnership` ya se ejecutó
+  ([ver tx](https://sepolia.arbiscan.io/tx/0x5da2963d3cdf964f1041e9fc53e38474b4ae74d4cacf7675d394e2824182bc10)) —
+  `owner()` ahora devuelve `0x3fBB9a2725aC676540Ce38567E2F62b39FC323fF`, así que quien tenga
+  esa sesión ya ve "Panel de administrador — Beneficios sociales" al loguearse normal, sin
+  pasos extra.
+- **Por qué esto no toca el fiado.** `extendFiado`/`setFiadoEnabled` siguen siendo
+  deliberadamente self-service y `msg.sender`-keyed — cada bodega controla únicamente su
+  propio fiado, sin lista de permisos aparte (ver "Fiado con libro de deuda real" más arriba).
+  Sumarle una capa de "solo un Admin" ahí revertiría esa decisión ya probada en vivo, así que
+  el nuevo panel de administrador es aditivo (vive en la misma pantalla que ya tiene fiado,
+  como una sección extra que solo un `owner` ve) en vez de restrictivo sobre algo que ya
+  funcionaba.
+
+**UI de canje, del lado del beneficiario (`BuyerPanel.tsx`).** Ya no hace falta salir de la
+app para gastar el beneficio como una transferencia ERC-20 genérica: en cuanto el cliente
+tiene saldo de `BeneficioToken` (`balanceOf > 0`), ve una tarjeta aparte —separada del pago en
+efectivo, nunca mezclada con el botón "Pagar" normal— con su saldo y fecha de vencimiento. El
+pago mismo (`transfer(bodega, monto)`) se habilita recién cuando también escribió el código de
+una bodega, reusando el mismo buscador de código que ya usa para pagar en efectivo o pagar su
+fiado. No se pre-valida el vencimiento en el frontend — si el beneficio ya venció, el intento
+de pago revierte on-chain (`BenefitExpired`, ver `_update` en `BeneficioToken.sol`) y se
+muestra un error genérico; la fuente de verdad sigue siendo el contrato, no un cálculo de
+fecha en el cliente.
+
+**Qué sigue faltando:** UI de "canjear" ya construida (ver arriba) — no queda ningún pendiente
+de `BeneficioToken` en sí. Lo que sigue es roadmap fuera de este contrato (eSol, InvoiceEscrow,
+ver "MVP actual" más abajo).
+
+### El bot de Telegram como perfil (probado en vivo)
+
+Ni la web ni el bot muestran nunca "ETH" ni una dirección `0x...` al bodeguero o al
+comprador — todo se ve en soles, y la vinculación con Telegram se hace con un código
+de 6 dígitos, no pegando una dirección en el chat.
+
+**Webhook en producción, no polling — Vercel no puede correr un daemon.** La primera versión
+de esto usaba `scripts/telegram-bot.mjs`, un proceso Node aparte haciendo `getUpdates`
+(long-polling) sin parar. Eso funciona en una laptop con una terminal abierta, pero **no
+puede funcionar en Vercel**: cada función serverless responde una vez y se apaga, no hay forma
+de dejar un proceso escuchando para siempre. Con ese diseño, cualquier mensaje mandado al bot
+mientras la app estaba en producción se quedaba sin procesar en la cola de Telegram — se
+confirmó así al revisar `getWebhookInfo`/`getUpdates` directo contra la API de Telegram.
+
+La solución es que Telegram llame a una URL nuestra en vez de que nosotros le preguntemos todo
+el rato — un webhook, que sí encaja con el modelo de Vercel (una función que responde a un
+solo POST). `app/api/telegram/webhook/route.ts` cumple ese rol; la lógica de negocio (que
+antes vivía repartida entre el daemon y las rutas que llamaba) se movió a
+`lib/telegramCommands.ts` (despacho de `/start`, `/vincular`, `/perfil`) y
+`lib/telegramProfile.ts` (armado del texto de `/perfil`), para que el webhook y `GET
+/api/telegram/profile` (que sigue existiendo para el daemon de desarrollo) compartan el mismo
+código en vez de duplicarlo. El header `X-Telegram-Bot-Api-Secret-Token` (comparado contra
+`TELEGRAM_WEBHOOK_SECRET`) rechaza pedidos que no vengan realmente de Telegram.
+
+**Vinculación:**
+1. Desde `BodegaOwnerPanel.tsx` (o `BuyerPanel.tsx`, opcional para el comprador) se
+   pide un código con "Generar mi código" → `POST /api/telegram/generate-code` guarda
+   `{código → dirección}` en memoria (vence a los 10 minutos, un solo uso).
+2. Un botón abre `t.me/<bot>?start=<código>`. Se usa el mecanismo de `/start` con payload,
+   *no* `?text=/vincular <código>` — probado en vivo que ese segundo formato es poco confiable:
+   como `/vincular` ya está registrado como comando del bot, el cliente de Telegram a veces lo
+   reconoce y lo manda solo, cortando el código antes de que el usuario pueda completarlo.
+   `?start=` es el mecanismo que Telegram diseñó exactamente para este caso (deep link con un
+   parámetro) y siempre llega completo.
+3. El webhook recibe `/start <código>` y llama a la misma lógica que `/vincular <código>`,
+   que guarda `chat_id → dirección` vía `lib/kv.ts` (Upstash Redis en producción,
+   `frontend/.data/telegram-links.json` en desarrollo local — ver "Storage: Upstash Redis en
+   producción" más abajo).
+4. La web hace poll de `GET /api/telegram/status` hasta ver el link confirmado.
+
+**Perfil por chat:** una vez vinculado, cualquiera —bodeguero o comprador— puede
+escribirle `/perfil` al bot en cualquier momento, no solo recibir avisos push. Lee
+`PaymentRouter.isBodega` para decidir el rol y arma la respuesta:
+
+- **Bodega:** pagos recibidos, nivel de confianza y cuánto fiado ofrece (en soles).
+- **Comprador:** puntos de cashback acumulados (convertidos a soles).
+
+**Registrar el webhook** (una sola vez, después de desplegar el código de
+`app/api/telegram/webhook`):
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://<tu-dominio>/api/telegram/webhook", "secret_token": "<TELEGRAM_WEBHOOK_SECRET>"}'
+```
+
+**Desarrollo local:** sin una URL pública HTTPS, Telegram no puede llamar al webhook, así que
+en local se sigue usando el daemon de polling (`scripts/telegram-bot.mjs`, sin secreto, sin
+webhook), corriendo aparte de `pnpm run dev`:
+
+```bash
+cd frontend
+pnpm run bot
+```
+
+**Lista de comandos para @BotFather** (`/setcommands` → elegir el bot → pegar tal cual):
+
+```
+start - Ver cómo vincular tu cuenta de Bodegueando
+vincular - Vincular tu cuenta con tu código de 6 dígitos (ej. /vincular 123456)
+perfil - Ver tus pagos, puntos o fiado
+```
+
+Corrida real de punta a punta contra los contratos desplegados arriba:
+
+1. Código generado desde la web, vinculado con `/vincular <código>` en
+   [@bodegueandobot](https://t.me/bodegueandobot).
+2. `/perfil` respondió: *"🛍️ Tu cuenta en Bodegueando · Tienes S/ 0.30 en puntos
+   acumulados por cashback."* — nunca un monto en ETH.
+3. Pago real de 0.002 ETH, notificado como
+   [tx `0x59afd6a7...`](https://sepolia.arbiscan.io/tx/0x59afd6a78efaf73276b055b8a371b10648e2b962052ab82ac7718153854712fb):
+   mensaje de Telegram recibido al instante, ahora en soles (*"💰 Te pagaron S/ X.XX
+   en Bodegueando."*).
+
+### Storage: Upstash Redis en producción, archivo local en desarrollo
+
+El filesystem de Vercel es efímero por invocación — dos requests al mismo endpoint pueden
+correr en instancias serverless distintas que nunca vieron lo que la otra escribió. Con la app
+ya desplegada en `bodegueando.vercel.app`, los dos stores que antes eran solo un JSON en
+`frontend/.data/` (`getOrCreateCode`/`resolveCode` de códigos de bodega/cliente, y el mapeo
+`chat_id ↔ dirección` de Telegram) corrían un riesgo real de comportarse de forma
+inconsistente en producción — no un problema teórico, sino algo que ya podía estar pasando.
+
+`lib/kv.ts` resuelve esto con dos backends detrás de la misma interfaz
+(`readJsonStore`/`writeJsonStore`):
+
+- **Con `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN` seteadas** (cuenta gratis en
+  [console.upstash.com](https://console.upstash.com)): usa Redis real vía REST — funciona
+  igual desde cualquier función serverless, sin necesidad de una conexión persistente.
+- **Sin esas variables**: cae de vuelta al archivo JSON de siempre bajo `.data/` — cero
+  fricción para seguir desarrollando en local sin crear una cuenta de Upstash.
+
+`lib/bodegaCodes.ts` y `lib/telegram.ts` se refactorizaron para usar esta abstracción (sus
+funciones pasaron de sync a `async`); las rutas API que las llaman ya eran `async`, así que
+solo hizo falta agregar los `await` correspondientes. Verificado localmente: el
+round-trip completo (generar código → resolverlo) sigue funcionando igual por el camino de
+fallback a archivo, sin credenciales de Upstash configuradas.
+
+### Faucet automático de saldo de prueba para la demo
+
+`PaymentRouter.receivePayment` cobra en ETH de testnet (el stand-in de eSol — ver "Atajos
+conscientes de hackathon"), y a diferencia del gas (que paga `PuntosPaymaster`), el *monto del
+pago* tiene que salir del propio saldo del comprador. Una cuenta nueva arranca en 0 ETH — antes
+de esto, la única forma de probar un pago real era que un operador le mandara testnet ETH a
+mano a cada cuenta de prueba (`cast send`), algo que no escala para que gente ajena pruebe la
+demo por su cuenta.
+
+`app/api/faucet/route.ts` resuelve esto: apenas `BuyerPanel` detecta una cuenta conectada,
+le pide un pequeño regalo de saldo (`FAUCET_AMOUNT_ETH`, default 0.005 ETH) — una transacción
+real de testnet ETH, no simulada. Protecciones contra abuso:
+
+- **Una sola vez por dirección**, registrado en `lib/kv.ts` (mismo store que
+  bodega-codes/telegram-links) apenas se manda la transacción — no importa si la cuenta gasta
+  el saldo, no vuelve a pedir.
+- **Chequea el balance on-chain actual** antes de mandar nada — si la cuenta ya tiene fondos
+  (por ejemplo, fondeada a mano antes de que existiera esta ruta), no duplica el regalo.
+- Sin `FAUCET_PRIVATE_KEY` configurada, la ruta simplemente no hace nada (`funded: false`) —
+  no rompe el flujo de pago si no está configurada, solo no regala saldo.
+
+Solo aplica a compradores (`BuyerPanel`) — una bodega nunca necesita tener ETH propio, ya que
+`registerSelf`/`setFiadoEnabled`/`extendFiado` no mandan valor, solo gas (que ya cubre
+`PuntosPaymaster`). Probado en vivo: primera llamada manda una transacción real y confirma el
+balance nuevo on-chain; la segunda llamada para la misma dirección no manda nada.
+
+Igual que el depósito de gas del paymaster, esta cuenta fondeadora necesita reposición manual
+ocasional — es un atajo de demo, no una rampa fiat real (ver "Rampas eSol ↔ PEN reales" en la
+tabla de roadmap más abajo para la distinción con una integración real de Yape/efectivo).
+
+### Login sin wallet + registro self-service + gas pagado con PUNTOS (probado en vivo)
+
+La meta del producto es que nadie tenga que saber qué es una wallet. Esto ya funciona de
+punta a punta:
+
+- **Login (`components/Login.tsx`, Privy):** entras con tu teléfono o correo (código OTP),
+  nunca con "conecta tu wallet". Privy crea una wallet embebida en el primer login, invisible
+  para el usuario — solo ve su correo/teléfono en pantalla.
+- **Registro self-service de bodegas (`PaymentRouter.registerSelf`):** cualquiera puede
+  registrarse como bodega desde la web, sin que un admin lo apruebe (ver "Análisis" en el
+  código del contrato: `isBodega` solo decide quién puede *recibir* un pago que el comprador
+  ya eligió mandar — no hay nada que abusar).
+- **Gas pagado con PUNTOS, no con ETH (`PuntosPaymaster.sol`, ERC-4337):** cada persona tiene
+  una *smart account* (no una wallet normal) cuya llave es la wallet embebida de Privy. La
+  primera transacción de cada cuenta la patrocina la app gratis (bootstrap); de ahí en
+  adelante, el gas de cada transacción se cobra directamente en PUNTOS del propio saldo del
+  usuario — sin oráculo de precio, porque PUNTOS ya está denominado en la misma unidad que el
+  ETH del pago original (`cashback = monto × cashbackBps`, en wei). El usuario nunca ve "gas"
+  ni firma un popup de MetaMask; solo ve un botón que dice "Registrar" o "Pagar".
+
+**Bug real encontrado en vivo: una bodega se quedaba sin forma de pagar gas después de su
+primera transacción.** El cashback en PUNTOS solo lo mintea `receivePayment` a quien *paga*
+(`msg.sender`), nunca a la bodega que cobra — así que una cuenta que solo actúa como bodega
+(nunca compra nada en otro lado) nunca junta PUNTOS por su cuenta. Su única transacción
+gratuita es `registerSelf()` (el bootstrap); la siguiente — `setFiadoEnabled`, `extendFiado`,
+cualquier acción de bodega — pasa por `PuntosPaymaster._validatePaymasterUserOp`, que exige
+`balanceOf(cuenta) >= maxCost` y revierte con `InsufficientPuntosBalance` si no hay saldo. Con
+0 PUNTOS, *cualquier* bodega quedaba permanentemente bloqueada apenas un paso después de
+registrarse — confirmado leyendo `hasBootstrapped`/`balanceOf` directo on-chain contra una
+cuenta real que reportó justo ese síntoma ("No se pudo guardar. Intenta de nuevo." al intentar
+activar fiado).
+
+**Fix:** `registerSelf()` (y `registerBodega`) ahora mintean `BODEGA_BOOTSTRAP_PUNTOS`
+(0.005 ETH-equivalente, ~decenas de transacciones futuras) al momento del registro — el
+mismo mecanismo que ya existía para compradores (ganar PUNTOS de su acción calificante),
+aplicado a la acción calificante de una bodega. Probado end-to-end con una cuenta nueva
+(`registerSelf` con el `approve` de PUNTOS incluido en el mismo bootstrap, igual que hace
+`sendAndWait`, seguido de un `setFiadoEnabled` real pagado en PUNTOS desde el saldo de
+bienvenida) antes de dar el fix por confirmado, no solo por los tests unitarios — ver
+`test_RegisterSelf_MintsBootstrapPuntos` / `test_RegisterBodega_MintsBootstrapPuntos` en
+`test/PaymentRouter.t.sol` para la cobertura unitaria.
+
+**Segundo bug relacionado, en `PuntosPaymaster._postOp`: el bootstrap se quemaba aunque la
+transacción hubiera fallado.** El primer parámetro de `_postOp` es un `PostOpMode`
+(`opSucceeded` / `opReverted` / `postOpReverted`) que dice si la llamada de la cuenta salió
+bien o no — el contrato original lo recibía sin siquiera nombrarlo, ignorándolo por completo,
+y marcaba `hasBootstrapped[cuenta] = true` sin importar el resultado. Esto significa que el
+*primer* intento fallido de cualquiera (una bodega con un código mal escrito, un comprador que
+se equivocó de monto, cualquier revert dentro del contrato) igual consumía la única
+transacción gratis — dejando a esa cuenta con 0 PUNTOS y sin ninguna forma de pagar la
+siguiente. No es un bug exclusivo de bodegas: afecta a cualquier cuenta cuya primera
+transacción patrocinada haya revertido, por el motivo que sea.
+
+**Fix:** `_postOp` ahora solo marca el bootstrap como usado cuando `mode == PostOpMode.opSucceeded`.
+Un primer intento que revierte no cuenta — la cuenta sigue teniendo su transacción gratis
+disponible para cuando lo intente de nuevo (correctamente esta vez). Cubierto por
+`test_FailedFirstUserOp_DoesNotBurnBootstrap` en `test/PuntosPaymaster.t.sol`: valida
+`postOp` con `PostOpMode.opReverted` directo, confirma que `hasBootstrapped` sigue en `false`,
+y que la cuenta todavía puede tener un primer `opSucceeded` gratis después. Verificado también
+en vivo contra el paymaster redesplegado, con una cuenta real haciendo su primera transacción
+exitosa y confirmando que `hasBootstrapped` pasa a `true` recién ahí. Como el mapeo
+`hasBootstrapped` vive en el contrato del paymaster, redesplegarlo también "desatascó" de
+paso a cualquier cuenta que ya hubiera quedado atrapada por este bug con el paymaster
+anterior — sin necesitar identificarlas una por una.
+
+Corrida real de punta a punta contra los contratos desplegados arriba (script standalone con
+`permissionless.js` + el bundler de Pimlico, sin pasar por el navegador, para aislar la
+infraestructura antes de probarla con Privy real):
+
+1. Smart account nueva (owner: una wallet local descartable) manda `registerSelf()` como su
+   primera UserOperation.
+2. `PuntosPaymaster` la patrocina gratis (evento `FreeBootstrapUsed` emitido) — el usuario no
+   pagó nada de gas.
+3. `PaymentRouter` emite `BodegaRegistered` y `isBodega(smartAccount)` pasa a `true` on-chain.
+
+Después de esto se repitió el flujo completo en el navegador con un login real de Privy:
+entrar por teléfono/correo → elegir explícitamente "Soy bodeguero" (dispara `registerSelf()`,
+sin popup de wallet, se siente instantáneo) → pasar a la vista de bodeguero, con un QR nuevo
+para cobrar (ver siguiente sección) — confirmado en vivo.
+
+### Bodeguero y cliente son dos espacios separados, nunca combinados
+
+`app/app/page.tsx` no infiere el rol combinándolo con la vista del otro: una cuenta ya
+registrada como bodega (`isBodega` on-chain) va **directo** a `BodegaOwnerPanel`, sin
+posibilidad de ver `BuyerPanel` en la misma sesión. Una cuenta nueva ve una elección explícita
+antes de cualquier panel — "Soy bodeguero" / "Soy cliente" — en vez del diseño anterior, donde
+cualquiera que entraba caía primero en la vista de comprador con un link de "¿Tienes una
+bodega? Regístrala aquí" flotando dentro de esa misma pantalla (los dos espacios mezclados en
+una sola vista). "Soy bodeguero" dispara `registerSelf()` igual que antes; "Soy cliente" solo
+guarda la elección (`localStorage`, por dirección) para no volver a preguntar en próximas
+visitas — nunca se asume sola. El QR de bodega (`/pagar/[code]`, ver abajo) sigue sin pasar por
+ningún selector: escanear un QR ya es una intención de cliente inequívoca.
+
+**El mismo principio dentro de `BuyerPanel.tsx`: no ofrecer una acción hasta confirmar el rol
+del código escrito.** El campo "Código de la bodega" resuelve contra el mismo store que los
+códigos de cliente (`lib/bodegaCodes.ts` no distingue quién generó cada código) — así que
+antes de este fix, escribir por error el código propio (el de "Tu código para que te fíen")
+en ese campo dejaba ver y usar "Pagar en la bodega" igual, y el pago recién revertía on-chain
+al mandarlo, con un error genérico sin explicar por qué. Se agregó una lectura de
+`isBodega(dirección resuelta)` y toda la UI de pago (efectivo, fiado, beneficio social) queda
+oculta hasta que el código resuelto sea, de verdad, una bodega registrada — si no lo es, se
+avisa explícito ("Ese código no corresponde a una bodega") en vez de dejar intentar un pago
+que va a fallar.
+
+### Código de la bodega: QR + número corto, nunca una dirección (probado en vivo)
+
+`BodegaOwnerPanel.tsx` ya no muestra una dirección `0x...` para que el cliente la copie —
+genera un código permanente de 6 dígitos (`lib/bodegaCodes.ts`, vía `lib/kv.ts`, sin expirar —
+a diferencia del código de Telegram, este tiene que seguir funcionando meses después, impreso
+en un cartel) y lo muestra como QR
+(`qrcode.react`) que codifica `https://<dominio>/pagar/<código>`.
+
+El cliente escanea con la cámara nativa del celular (sin librería de escaneo: la URL abre
+directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y precarga
+`BuyerPanel`) o escribe el código a mano como respaldo. Ninguno de los dos paneles muestra un
+`0x...` en ningún lado.
+
+### Mapa de bodegas cercanas ([mapcn.dev](https://www.mapcn.dev))
+
+`GroupOrders` y `RewardsCatalog` habían quedado documentados como listas globales, no
+filtradas por cercanía, porque no había dónde guardar ni mostrar la ubicación de una bodega.
+Este mapa cierra ese hueco usando [mapcn](https://www.mapcn.dev) — componentes de mapa para
+React sobre MapLibre GL, tiles gratis de CARTO (sin API key), instalados vía el CLI de
+shadcn/ui (`pnpm dlx shadcn@latest add @mapcn/map`, que a su vez necesitó
+`shadcn@latest init` primero — este proyecto no tenía shadcn/ui instalado).
+
+- **Ubicación como metadata de UX, no on-chain**: mismo criterio que los códigos de 6 dígitos
+  (`lib/bodegaCodes.ts`) — nadie necesita verificación trustless de un pin en un mapa. Vive en
+  `lib/bodegaLocations.ts` (mismo patrón `readJsonStore`/`writeJsonStore` de `lib/kv.ts`,
+  Upstash con fallback a archivo) y `app/api/bodega/location/route.ts` (`POST` guarda/
+  actualiza, `GET` sin parámetros devuelve la lista completa para alimentar el mapa, `GET
+  ?address=` precarga la propia).
+- **`BodegaOwnerPanel.tsx`**, sección "Tu ubicación en el mapa": botón que pide
+  `navigator.geolocation.getCurrentPosition` para centrar el mapa, con un pin arrastrable
+  (`MapMarker draggable`) para ajustarlo a mano si el GPS no cae exacto.
+- **`BuyerPanel.tsx`**, sección "Bodegas cercanas": geolocaliza al cliente para centrar el
+  mapa (si deniega el permiso, centra en Lima por defecto), trae todas las bodegas con
+  ubicación guardada y pone un pin por cada una; el popup de cada pin resuelve su código de 6
+  dígitos (mismo truco que ya usa `RewardsCatalog` en el frontend: `POST /api/bodega/code`
+  crea-o-devuelve el código de cualquier dirección) y linkea a `/pagar/[code]`, la misma ruta
+  que ya usa el QR de la bodega — no hizo falta construir nada nuevo ahí.
+- No hay "cercanía" calculada ni ordenada por distancia: el mapa mismo, centrado en el
+  cliente, ya comunica visualmente qué bodegas están cerca — misma simplicidad deliberada que
+  el resto del proyecto.
+
+**Dos problemas reales encontrados y arreglados al instalar mapcn, no simulados:**
+`shadcn@latest init` pisó la paleta propia de la app (`--background`/`--foreground` pasaron a
+blanco/negro genérico de shadcn) y rompió `--font-sans` (quedó autorreferenciado en vez de
+apuntar a `--font-geist-sans`) — se corrigió a mano en `app/globals.css`, dejando el resto del
+scaffolding de shadcn (que el popup del mapa sí usa) intacto. Además, el `components/ui/map.tsx`
+que genera el registro de mapcn importa un *default export* de `maplibre-gl` que la versión
+6.2.0 (la que instala hoy) ya no tiene — se cambió a `import * as MapLibreGL` para que
+compile.
+
+## Atajos conscientes de hackathon
+
+- **eSol → ETH nativo de testnet.** `PaymentRouter.receivePayment` usa `msg.value`
+  (ETH nativo de Arbitrum Sepolia) en vez de un token eSol con paridad PEN/USD, para no
+  perder tiempo resolviendo un oráculo de precio durante la hackathon.
+- **Oráculo de IA con clave en el servidor.** `app/api/fiado-score/route.ts` firma la
+  transacción `updateScoreFromAi` con una clave privada de testnet guardada en
+  `ORACLE_PRIVATE_KEY` (variable de entorno del servidor Next.js). En producción esto
+  debería ser un servicio de firma dedicado, no una clave en el proceso del backend — eso
+  sigue siendo cierto hoy. Lo que sí se agregó fue un límite al daño que esa clave puede hacer
+  si se filtra: `FiadoScoring.update_score_from_ai` ahora rechaza cualquier límite que el
+  oráculo proponga por encima del doble de lo que el heurístico on-chain ya justificaría con
+  el historial real — ver "Circuit breaker on-chain para el oráculo de IA". No reemplaza mover
+  la clave a un servicio aparte, pero acota el impacto mientras tanto.
+- **`SimpleAccount` (referencia de eth-infinitism), no Safe ni Kernel.** Es la implementación
+  que usa la guía oficial de Pimlico para signers de Privy — menor superficie de riesgo que
+  evaluar otra librería de smart accounts contra el reloj de la hackathon.
+- **Pimlico solo como bundler, paymaster propio.** `PuntosPaymaster.sol` es un contrato
+  nuestro (no el paymaster ERC-20 hosteado de Pimlico) porque PUNTOS es un token propio sin
+  precio de mercado — Pimlico solo transmite las UserOperations al EntryPoint, toda la lógica
+  de "gratis la primera vez, después se cobra en PUNTOS" vive en nuestro contrato.
+- **El depósito de gas del paymaster se repone a mano.** `PuntosPaymaster` necesita ETH real
+  depositado en el EntryPoint para poder patrocinar transacciones (`deposit()` / `cast send`);
+  no hay una ruta automática que lo recargue sola — es responsabilidad de quien opera la app,
+  documentado así a propósito en vez de simular una automatización que no existe. Lo que sí
+  hay es una alerta: `pnpm run check-paymaster-balance` (`scripts/check-paymaster-balance.mjs`)
+  lee el depósito real del EntryPoint y manda un aviso por Telegram a `TELEGRAM_ADMIN_CHAT_ID`
+  si cae bajo `PAYMASTER_BALANCE_ALERT_THRESHOLD_ETH` (default `0.01` ETH) — para correr a
+  mano o desde un cron/CI. Sigue siendo *alerta*, no auto-repuesto: alguien sigue decidiendo
+  cuándo recargar, solo que ahora se entera a tiempo.
+- **El QR de la bodega necesita una URL real, no localhost.** `app/pagar/[code]/page.tsx` solo
+  se puede escanear con la cámara del celular si la app está desplegada (Vercel u otro) —
+  en `localhost` sigue funcionando el código de 6 dígitos escrito a mano.
+- **WhatsApp (Twilio)**: solo un stub (`app/api/whatsapp/webhook/route.ts`), prioridad
+  más baja del proyecto. WhatsApp Business API requiere aprobación de permisos de
+  Meta — por eso **Telegram se implementó primero**: mismo objetivo (avisar al
+  bodeguero cuando le pagan), sin ese trámite, mucho más rápido de demostrar.
+- **Telegram: webhook en producción, polling solo en desarrollo local.**
+  `app/api/telegram/webhook/route.ts` es lo que corre de verdad contra Vercel — un daemon de
+  polling (`getUpdates` sin parar) no puede correr ahí, cada función serverless responde una
+  vez y se apaga. `scripts/telegram-bot.mjs` se mantiene solo para desarrollo local, donde no
+  hay una URL pública HTTPS para que Telegram le pegue a un webhook. El mapeo chat_id ↔
+  dirección se guarda vía `lib/kv.ts` — ver "Storage: Upstash Redis en producción".
+- **Tasa de cambio ETH → PEN de solo lectura, cacheada.** `lib/exchangeRate.ts` trae
+  ETH/USD de CoinGecko y USD/PEN de open.er-api.com (ambas sin API key; se descartó
+  frankfurter.app porque solo cubre monedas de referencia del BCE y no incluye
+  soles), cachea el resultado ~5 minutos y cae a una tasa aproximada hardcodeada si
+  alguna de las dos está caída — la demo no se puede romper por una API externa.
+  No hay contrato de por medio: es puramente de display, para que nadie vea "ETH" en
+  la app.
+
+## Arquitectura completa / Roadmap
+
+La idea de producto es que la blockchain sea invisible: el bodeguero y el cliente nunca
+deberían ver "gas", "red", "dirección" ni "seed phrase" — todo se siente como una app de
+pagos y puntos, pero por dentro lo crítico (saldo, puntos, fiado) vive on-chain. Lo que
+sigue es la arquitectura completa a la que apunta el producto; la sección **MVP actual**
+marca qué parte de esto ya está construido y probado en testnet.
+
+### Capas del sistema
+
+1. **Capa de usuario** — app PWA/web para bodeguero y cliente, login con celular/correo
+   (Privy, sin "conecta tu wallet" — implementado), QR de cobro en el local (implementado),
+   avisos de pago por Telegram (implementado) y WhatsApp (roadmap, pendiente de aprobación
+   de Meta).
+2. **Abstracción de cuenta (ERC-4337)** — smart accounts creadas en el primer login,
+   bundler (Pimlico) + paymaster propio (`PuntosPaymaster.sol`) que patrocina la primera
+   transacción gratis y cobra el resto en PUNTOS — implementado y probado en vivo. Login por
+   passkey (WebAuthn) ya está habilitado como método de autenticación además de SMS/correo —
+   el firmante de la smart account sigue siendo la misma wallet embebida de Privy en los tres
+   casos, así que esto no cambió esta arquitectura, solo agregó una forma más de entrar.
+3. **Contratos on-chain (Arbitrum)** — el ledger de verdad, no una base de datos:
+   - `PaymentRouter.sol` — procesa pagos, cashback, puntos y registro self-service de
+     bodegas (`registerSelf`, implementado — `MerchantRegistry.sol` separado ya no hace
+     falta, esa responsabilidad vive en `PaymentRouter`).
+   - `PuntosPaymaster.sol` — paymaster ERC-4337 que cobra el gas en PUNTOS (implementado).
+   - `LoyaltyPoints.sol` — token de puntos (implementado como `PuntosToken`, ERC-20).
+   - `CreditLineManager.sol` — líneas de fiado, límites y vencimientos (implementado
+     como `FiadoScoring` en Stylus, con scoring on-chain **y** ajuste por IA — ya en
+     producción en testnet, no es "próxima fase").
+   - `InvoiceEscrow.sol` — fiado con garantía parcial, opción adicional junto al fiado sin
+     garantía de siempre (desplegado, verificado y probado en vivo — ver "InvoiceEscrow").
+   - `RewardsCatalog.sol` — catálogo de beneficios canjeables por PUNTOS, propio de cada
+     bodega y canjeable en cualquier bodega de la red (desplegado, verificado y probado en
+     vivo — ver "RewardsCatalog").
+   - `GroupOrders.sol` — compras conjuntas entre bodegas para alcanzar el mínimo de un
+     distribuidor (desplegado, verificado y probado en vivo — ver "GroupOrders").
+   - `CreditCertificate.sol` + `CreditLine.sol` — certificado de crédito con Zero-Knowledge
+     (Circom/Groth16) y línea de crédito on-chain que lo consume (implementado y testeado —
+     ver "CreditCertificate"/"CreditLine").
+4. **Backend y servicios** — API que orquesta creación de smart account, llamadas a
+   contratos, scoring y notificaciones; base de datos para perfil/catálogo/métricas y
+   cache de saldos para que la UX se sienta instantánea; motor de riesgo off-chain
+   como complemento al scoring on-chain.
+5. **On/off ramps** — conversión eSol ↔ PEN bancarizado vía rampas locales. Para la
+   hackathon queda simulado (eSol = ETH nativo de testnet, ver "Atajos" arriba), pero
+   el punto de integración queda claro en el diseño.
+
+```
+[Cliente / Bodeguero]
+       │  login con teléfono/correo (Privy)
+       ▼
+[App PWA / Web] ←→ [Bot de Telegram] (WhatsApp: roadmap)
+       │  UserOperation (smart account, firmada por la wallet embebida)
+       ▼
+[Bundler (Pimlico) + PuntosPaymaster.sol]
+       │
+       ▼
+[Arbitrum Sepolia]
+  - PaymentRouter (pagos, cashback, registro self-service de bodegas)
+  - PuntosToken (LoyaltyPoints)
+  - FiadoScoring / CreditLineManager (Stylus)
+  - PuntosPaymaster (paga el gas, cobrado en PUNTOS)
+```
+
+### MVP actual — qué está construido vs. roadmap
+
+| Pieza | Estado |
+|---|---|
+| Pago QR → cashback → puntos (`PaymentRouter` + `PuntosToken`) | ✅ Desplegado y probado en Arbitrum Sepolia |
+| Fiado con scoring on-chain (`FiadoScoring`, Stylus) | ✅ Desplegado y verificado |
+| Fiado opt-in por bodega (`setFiadoEnabled`/`isFiadoEnabled`) | ✅ Desplegado — apagado por defecto, cada bodega prende el suyo |
+| Ledger de fiado por cliente (`extendFiado`/`repayFiado`/`payFiado`) | ✅ Probado en vivo end-to-end en Arbitrum Sepolia (además de 6/6 Rust, 17/17 Solidity) — ver "Fiado con libro de deuda real" |
+| Circuit breaker on-chain del oráculo de IA (`updateScoreFromAi` acotado al 2× del heurístico) | ✅ Probado en vivo en Arbitrum Sepolia (8/8 Rust) — ver "Circuit breaker on-chain para el oráculo de IA" |
+| Login con passkey (WebAuthn) además de SMS/correo | ✅ Habilitado — mismo embedded wallet como firmante, solo cambia el método de autenticación |
+| Alerta de balance bajo en `PuntosPaymaster` (`pnpm run check-paymaster-balance`) | ✅ Funcional — sigue siendo alerta, no auto-repuesto, a propósito |
+| `BeneficioToken` — programas sociales restringidos (Vaso de Leche, Qali Warma, Pensión 65) | ✅ Desplegado, verificado y con ownership transferido a una sesión real logueada (9/9, 26/26 en todo el repo). UI de emisión admin-only en el panel de bodega + UI de canje en el panel de cliente, ambas funcionales — ver "`BeneficioToken.sol`" |
+| Bodeguero/cliente como espacios separados (selector explícito, sin vistas combinadas) | ✅ Funcional — ver "Bodeguero y cliente son dos espacios separados" |
+| Códigos de bodega/cliente y vínculos de Telegram en Upstash Redis (no archivo local) | ✅ Funcional con fallback automático a archivo si no hay credenciales de Upstash — cierra el riesgo real del filesystem efímero de Vercel, ver "Storage: Upstash Redis en producción" |
+| Faucet automático de saldo de prueba para compradores nuevos | ✅ Funcional — una vez por cuenta, probado en vivo con transacción real, ver "Faucet automático de saldo de prueba" |
+| Ajuste de fiado con IA (Claude, en español, escribe on-chain) | ✅ Probado en vivo end-to-end |
+| Dashboard web (leer score/límite, pagar, pedir recálculo IA) | ✅ Funcional |
+| Vistas separadas bodeguero/comprador, detectadas por rol on-chain | ✅ Funcional (`isBodega` en `PaymentRouter`) |
+| Avisos de pago y perfil (`/perfil`) por Telegram, todo en soles | ✅ Funcional — webhook en producción (el daemon de polling no puede correr en Vercel), vinculación por código de 6 dígitos vía deep link `/start`, ver "El bot de Telegram como perfil" |
+| Montos en soles (PEN) en vez de ETH, con tasa de cambio real | ✅ Funcional — conversión de display, ver "Atajos" |
+| Registro self-service de bodegas (`PaymentRouter.registerSelf`) | ✅ Probado en vivo — cualquiera se registra desde la web, sin admin |
+| Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
+| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS. Incluye dos fixes encontrados en vivo: PUNTOS de bienvenida para bodegas, y que un primer intento fallido ya no quema la transacción gratis, ver "Login sin wallet..." |
+| Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
+| Mapa de bodegas cercanas (mapcn.dev / MapLibre) | ✅ Funcional — cada bodega guarda su ubicación, el cliente ve un mapa con todas y puede pagar directo desde el pin, ver "Mapa de bodegas cercanas" |
+| `InvoiceEscrow` (fiado con garantía parcial) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (11/11 Rust, 43/43 Solidity) — ver "InvoiceEscrow" |
+| `RewardsCatalog` (catálogo de beneficios canjeables entre bodegas) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (23/23 Solidity, 66/66 en todo el repo) — ver "RewardsCatalog" |
+| Compras conjuntas entre bodegas (`GroupOrders.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (19/19 Solidity, 85/85 en todo el repo) — ver "GroupOrders" |
+| Score crediticio del bodeguero con Zero-Knowledge (`CreditCertificate.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia — prueba ZK real generada y verificada on-chain, ver "CreditCertificate" |
+| Línea de crédito on-chain que consume el certificado ZK (`CreditLine.sol`) | ✅ Desplegado, verificado y probado en vivo — préstamo con garantía reducida (50% en tier 500) y repago, ver "CreditLine" |
+| Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
+| Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
+| `ePEN` (token propio, redimible 1:1 por soles reales) | 🔜 Roadmap — hoy la app solo convierte el monto a soles para mostrarlo (ver "Atajos"); un `ePEN` real necesitaría un emisor regulado que respalde cada token con soles en custodia (como una stablecoin bancaria), que es un problema de compliance y de rampas fiat, no solo de contrato. Construir el contrato ERC-20 en sí es trivial; lo que falta es esa pieza, y no vale la pena simularla con una paridad falsa que parezca más sólida de lo que es |
+
+### Flujo de demo objetivo (jurado)
+
+1. Cliente escanea el QR de la bodega y paga.
+2. Recibe confirmación y puntos de cashback al instante.
+3. Se pide el recálculo de fiado — la IA analiza el historial on-chain y ajusta el
+   límite, explicando por qué en español simple.
+4. Todo es verificable en el explorador: contratos verificados, transacciones reales.
+
+## Setup
+
+### Prerequisitos
+
+- Node.js + [pnpm](https://pnpm.io/)
+- [Foundry](https://book.getfoundry.sh/getting-started/installation) (`forge`, `cast`)
+- [Rust](https://rustup.rs/) + target `wasm32-unknown-unknown` + [cargo-stylus](https://github.com/OffchainLabs/cargo-stylus)
+
+```bash
+# Rust + wasm target
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+rustup target add wasm32-unknown-unknown
+cargo install cargo-stylus
+
+# Foundry
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+### Instalar dependencias del monorepo
+
+```bash
+pnpm install
+```
+
+### Contratos Solidity
+
+`contracts/solidity/lib/` (forge-std, OpenZeppelin) no está versionado — son dependencias de
+terceros reproducibles, no código del proyecto. Instalarlas primero:
+
+```bash
+cd contracts/solidity
+forge install foundry-rs/forge-std --no-git
+forge install OpenZeppelin/openzeppelin-contracts --no-git
+forge install eth-infinitism/account-abstraction@v0.7.0 --no-git
+cd ../..
+```
+
+```bash
+pnpm run contracts:build
+pnpm run contracts:test
+```
+
+Deploy a Arbitrum Sepolia (requiere `contracts/solidity/.env` con `PRIVATE_KEY`,
+`ARBITRUM_SEPOLIA_RPC_URL`, `FIADO_SCORING_ADDRESS` ya desplegado — ver abajo):
+
+```bash
+cd contracts/solidity
+forge script script/Deploy.s.sol:Deploy --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+Si `PuntosToken`/`FiadoScoring` ya están desplegados y solo cambió `PaymentRouter.sol`, usar
+`RedeployPaymentRouter.s.sol` en vez de `Deploy.s.sol` — reusa el `PuntosToken` existente en
+vez de crear uno nuevo (que borraría el saldo de puntos de todos los que ya probaron la app):
+
+```bash
+cd contracts/solidity
+PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> \
+  forge script script/RedeployPaymentRouter.s.sol:RedeployPaymentRouter \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# después: cast send <FiadoScoringAddress> "setPaymentRouter(address)" <nuevoRouter> ...
+```
+
+Deploy de `PuntosPaymaster` (requiere `PuntosToken` ya desplegado; el EntryPoint v0.7 usa la
+misma dirección canónica `0x0000000071727De22E5E9d8BAf0edAc6f37da032` en toda red EVM, ya
+confirmada desplegada en Arbitrum Sepolia):
+
+```bash
+cd contracts/solidity
+PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> DEPOSIT_ETH=0.02ether \
+  forge script script/DeployPuntosPaymaster.s.sol:DeployPuntosPaymaster \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+Deploy de `BeneficioToken` (requiere `PaymentRouter` ya desplegado, usado como
+`IBodegaRegistry`):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployBeneficioToken.s.sol:DeployBeneficioToken \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# opcional: cast send <BeneficioTokenAddress> "transferOwnership(address)" <smart account admin>
+```
+
+Deploy de `InvoiceEscrow` (requiere `PaymentRouter` y `FiadoScoring` ya desplegados; este
+último necesita soportar `setEscrow`/`extendFiadoFor`, agregados junto con este contrato —
+ver "InvoiceEscrow" más arriba):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> FIADO_SCORING_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployInvoiceEscrow.s.sol:DeployInvoiceEscrow \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# después: cast send <FiadoScoringAddress> "setEscrow(address)" <InvoiceEscrowAddress> ...
+```
+
+Deploy de `RewardsCatalog` (requiere `PaymentRouter` y `PuntosToken` ya desplegados; a
+diferencia de `InvoiceEscrow` no necesita wiring posterior en ningún otro contrato):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployRewardsCatalog.s.sol:DeployRewardsCatalog \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+Deploy de `GroupOrders` (requiere solo `PaymentRouter` ya desplegado; sin wiring posterior en
+ningún otro contrato):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployGroupOrders.s.sol:DeployGroupOrders \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+Deploy de `CreditCertificate` (despliega también el verificador Groth16 autogenerado; no
+necesita ningún otro contrato ya desplegado):
+
+```bash
+cd contracts/solidity
+forge script script/DeployCreditCertificate.s.sol:DeployCreditCertificate \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# después: cast send <CreditCertificateAddress> "setOraclePubKey(uint256,uint256)" <ax> <ay> ...
+# (ax/ay salen de frontend/lib/zkOracle.ts::getOraclePubKey() con el ZK_ORACLE_PRIVATE_KEY configurado)
+```
+
+Deploy de `CreditLine` (requiere `PaymentRouter` y `CreditCertificate` ya desplegados):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> CREDIT_CERTIFICATE_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployCreditLine.s.sol:DeployCreditLine \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+### Circuito ZK (CreditCertificate)
+
+```bash
+cd contracts/circom-credit-certificate
+npm install
+npm run compile   # circom → build/creditCertificate.r1cs + .wasm
+# trusted setup (reusa un Powers of Tau público — ver README, sección "CreditCertificate"):
+npx snarkjs groth16 setup build/creditCertificate.r1cs ptau/pot15_final.ptau build/creditCertificate_0000.zkey
+npx snarkjs zkey contribute build/creditCertificate_0000.zkey build/creditCertificate_final.zkey
+npx snarkjs zkey export solidityverifier build/creditCertificate_final.zkey build/CreditCertificateVerifier.sol
+npm test   # 3 tests: prueba válida, score insuficiente, firma incorrecta
+```
+
+Los artefactos que el frontend necesita en runtime (`creditCertificate.wasm`,
+`creditCertificate.zkey`, `verification_key.json`) ya están copiados y committeados en
+`frontend/circuits/` — no hace falta regenerarlos salvo que cambie el circuito.
+
+### Contrato Stylus (FiadoScoring)
+
+```bash
+pnpm run stylus:check
+```
+
+Deploy (requiere `contracts/stylus-fiado-scoring/.env` con `PRIVATE_KEY` y `RPC_URL`):
+
+```bash
+cd contracts/stylus-fiado-scoring
+cargo stylus deploy --private-key-path=... --endpoint=https://sepolia-rollup.arbitrum.io/rpc
+```
+
+### Frontend
+
+```bash
+cp frontend/.env.example frontend/.env.local
+# completar NEXT_PUBLIC_*_ADDRESS con las direcciones desplegadas,
+# ANTHROPIC_API_KEY y ORACLE_PRIVATE_KEY (testnet)
+pnpm run dev
+```
+
+Para el login sin wallet y el gas pagado en PUNTOS hacen falta dos cuentas gratuitas más
+(las crea quien opera el proyecto, nunca se pegan en el chat):
+
+- [dashboard.privy.io](https://dashboard.privy.io) — crear una app, restringir los métodos de
+  login a email + SMS, copiar el App ID público a `NEXT_PUBLIC_PRIVY_APP_ID`.
+- [dashboard.pimlico.io](https://dashboard.pimlico.io) — API key gratis de testnet, a
+  `NEXT_PUBLIC_PIMLICO_API_KEY`.
+- `NEXT_PUBLIC_PUNTOS_PAYMASTER_ADDRESS` — la dirección de `PuntosPaymaster` desplegado
+  arriba.
+
+## Regenerar ABIs para el frontend
+
+```bash
+forge inspect PaymentRouter abi --json > frontend/lib/abis/PaymentRouter.json   # envolver en {"abi": [...]}
+forge inspect PuntosToken abi --json > frontend/lib/abis/PuntosToken.json      # envolver en {"abi": [...]}
+cd contracts/stylus-fiado-scoring && cargo stylus export-abi --json   # copiar el array de salida a
+                                                                       # ../../frontend/lib/abis/FiadoScoring.json,
+                                                                       # envuelto en {"abi": [...]}
+```
+
+`cargo stylus export-abi` necesita `solc` en el `PATH` (Foundry lo descarga vía svm pero no lo
+expone con ese nombre exacto):
+
+```bash
+ln -sf ~/.local/share/svm/0.8.26/solc-0.8.26 ~/.local/share/svm/0.8.26/solc
+export PATH="$HOME/.local/share/svm/0.8.26:$PATH"
+```
+
+**Importante:** el macro `#[public]` de stylus-sdk convierte automáticamente los nombres de
+función snake_case de Rust a camelCase al exportar el ABI de Solidity (p.ej. `record_payment` →
+`recordPayment`). `contracts/solidity/src/interfaces/IFiadoScoring.sol` ya usa los nombres
+camelCase correctos — si cambias la API pública del contrato Rust, vuelve a generar el ABI y
+actualiza la interfaz Solidity para que coincidan.

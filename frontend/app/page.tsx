@@ -18,6 +18,25 @@ const FEATURES = [
     title: "Fiado sin arriesgarte",
     body: "El sistema recuerda quién paga bien y te dice cuánto es prudente fiarle a cada cliente. Tú siempre tienes la última palabra.",
   },
+  {
+    title: "Construye tu historial",
+    body: "Cada venta que registras queda como parte de la historia de tu bodega. Con el tiempo, ese historial puede ayudarte a conseguir un préstamo — sin mostrarle a nadie tus cuentas exactas.",
+  },
+];
+
+const MORE = [
+  {
+    title: "Premios para tus clientes",
+    body: "Tus clientes cambian los puntos que ganan por premios que tú eliges — un producto, un sorteo, lo que quieras ofrecer.",
+  },
+  {
+    title: "Bodegas cerca de ti",
+    body: "Aparece en un mapa para que la gente de tu zona te encuentre fácil, y encuentra tú también a otras bodegas cercanas.",
+  },
+  {
+    title: "Compra en grupo, paga menos",
+    body: "Júntate con otras bodegas del barrio para pedir mercadería juntas y llegar a mejores precios con tus proveedores.",
+  },
 ];
 
 const STEPS = [
@@ -129,6 +148,9 @@ export default function Home() {
             <a href="#fiado" className="transition-colors hover:text-[#0a0a0b]">
               Fiado
             </a>
+            <a href="#mas" className="transition-colors hover:text-[#0a0a0b]">
+              Más beneficios
+            </a>
             <a href="#confianza" className="transition-colors hover:text-[#0a0a0b]">
               Confianza
             </a>
@@ -218,7 +240,7 @@ export default function Home() {
               Sin líos, sin palabras raras — solo cobrar, juntar puntos y fiar cuando quieras.
             </p>
           </div>
-          <div className="mt-12 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="mt-12 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {FEATURES.map((f) => (
               <div
                 key={f.title}
@@ -288,6 +310,39 @@ export default function Home() {
               cuánto es prudente fiarle, explicándotelo en español sencillo. Nunca es
               obligatorio: cada bodega decide si quiere fiar, y a quién.
             </p>
+            <p className="mt-3 text-[#42433d]">
+              Y con el tiempo, ese mismo historial puede ser justo lo que le faltaba a tu
+              bodega para acceder a un préstamo — sin tener que mostrarle a nadie tus cuentas
+              exactas, línea por línea.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* more — light, everything beyond charging */}
+      <section id="mas" className="bg-[#fafaf7] px-6 py-24">
+        <div className="mx-auto max-w-6xl">
+          <div className="max-w-xl">
+            <KickerLight>Más beneficios</KickerLight>
+            <h2 className="mt-4 text-[clamp(1.9rem,3.4vw,2.6rem)] font-medium leading-[0.98] tracking-[-0.05em] text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+              Bodegueando es más que cobrar
+            </h2>
+            <p className="mt-3 text-[#55564f]">
+              La misma cuenta te da acceso a esto, cuando quieras usarlo.
+            </p>
+          </div>
+          <div className="mt-12 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {MORE.map((m) => (
+              <div
+                key={m.title}
+                className="rounded-[20px] border border-black/[0.1] bg-[#fffffc] p-6 shadow-sm transition-colors hover:border-black/20"
+              >
+                <h3 className="text-base font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+                  {m.title}
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-[#55564f]">{m.body}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>

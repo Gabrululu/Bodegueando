@@ -669,9 +669,9 @@ export function BodegaOwnerPanel() {
         body: JSON.stringify({ bodegaAddress: address, threshold: Number(certificateThreshold) }),
       });
       const attestation = await attestRes.json();
-      if (!attestRes.ok) throw new Error(attestation.error ?? "No se pudo firmar la atestación.");
+      if (!attestRes.ok) throw new Error(attestation.error ?? "No se pudo verificar tu historial.");
 
-      setCertificateStep("Generando la prueba ZK (puede tardar unos segundos)...");
+      setCertificateStep("Generando tu certificado (puede tardar unos segundos)...");
       const proveRes = await fetch("/api/credit-certificate/prove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -688,9 +688,9 @@ export function BodegaOwnerPanel() {
         }),
       });
       const proof = await proveRes.json();
-      if (!proveRes.ok) throw new Error(proof.error ?? "No se pudo generar la prueba.");
+      if (!proveRes.ok) throw new Error(proof.error ?? "No se pudo generar el certificado.");
 
-      setCertificateStep("Enviando el certificado on-chain...");
+      setCertificateStep("Enviando tu certificado...");
       const a = (proof.a as string[]).map((x) => BigInt(x));
       const b = (proof.b as string[][]).map((row) => row.map((x) => BigInt(x)));
       const c = (proof.c as string[]).map((x) => BigInt(x));
@@ -722,7 +722,7 @@ export function BodegaOwnerPanel() {
       loanCountQuery.refetch();
       loansQuery.refetch();
     } catch {
-      setBorrowError("No se pudo pedir el préstamo. Revisa que el pool tenga fondos suficientes.");
+      setBorrowError("No se pudo pedir el préstamo. Revisa que el fondo tenga suficiente disponible.");
     } finally {
       setIsBorrowing(false);
     }
@@ -1655,7 +1655,7 @@ export function BodegaOwnerPanel() {
 
       {creditCertificateAddress && (
         <section className={cardClass}>
-          <h2 className={sectionTitleClass}>Certificado de crédito ZK</h2>
+          <h2 className={sectionTitleClass}>Certificado de crédito</h2>
           <p className="text-xs text-[#6b6d64]">
             Probá que tu score supera un mínimo (ej. &quot;≥ 700&quot;) sin mostrarle a nadie la
             cifra exacta — un certificado que un banco, proveedor, o esta misma app pueden
@@ -1689,7 +1689,7 @@ export function BodegaOwnerPanel() {
             {isGeneratingCertificate ? certificateStep ?? "Generando..." : "Generar certificado"}
           </button>
           {certificateError && <p className="text-xs text-red-500">{certificateError}</p>}
-          {certificateConfirmed && <p className="text-xs text-green-600">¡Listo! Certificado emitido on-chain ✓</p>}
+          {certificateConfirmed && <p className="text-xs text-green-600">¡Listo! Certificado emitido ✓</p>}
         </section>
       )}
 
@@ -1697,15 +1697,15 @@ export function BodegaOwnerPanel() {
         <section className={cardClass}>
           <h2 className={sectionTitleClass}>Línea de crédito</h2>
           <p className="text-xs text-[#6b6d64]">
-            Con un certificado de crédito ZK vigente, pedís prestado de un pool compartido —
+            Con un certificado de crédito vigente, pedís prestado de un fondo compartido —
             cuanto mejor el score que probaste, menos garantía tenés que poner.
           </p>
 
           {myTierCollateralBps === null ? (
-            <p className="text-xs text-[#8f9189]">Necesitas un certificado de crédito ZK vigente para pedir prestado.</p>
+            <p className="text-xs text-[#8f9189]">Necesitas un certificado de crédito vigente para pedir prestado.</p>
           ) : (
             <div className="flex flex-col gap-2">
-              <p className="text-xs text-[#6b6d64]">Garantía requerida en tu tier: {(myTierCollateralBps / 100).toFixed(0)}%</p>
+              <p className="text-xs text-[#6b6d64]">Garantía requerida para tu nivel: {(myTierCollateralBps / 100).toFixed(0)}%</p>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-[#6b6d64]">Pedir prestado S/</span>
                 <input
@@ -1753,16 +1753,16 @@ export function BodegaOwnerPanel() {
         <section className={cardClass}>
           <h2 className={sectionTitleClass}>Panel de administrador — Beneficios sociales</h2>
           <p className="text-xs text-[#6b6d64]">
-            Solo vos ves esta sección: tu cuenta es la autorizada para emitir BeneficioToken
+            Solo vos ves esta sección: tu cuenta es la autorizada para emitir beneficios sociales
             (programas como Vaso de Leche o Pensión 65). Cada sol emitido solo se puede gastar
             en una bodega registrada — no se puede revender ni cambiar por efectivo.
           </p>
           {registryOutOfSync && (
             <div className="rounded-xl border border-amber-400/40 bg-amber-50 p-3">
               <p className="text-xs text-[#6b6d64]">
-                El registro de bodegas que usa BeneficioToken para validar a quién se le puede
-                pagar quedó desactualizado (se redesplegó PaymentRouter). Actualizalo para que
-                las bodegas nuevas puedan recibir beneficios.
+                La lista de bodegas que usa el sistema de beneficios para validar a quién se le
+                puede pagar quedó desactualizada. Actualizala para que las bodegas nuevas puedan
+                recibir beneficios.
               </p>
               <button
                 onClick={handleSyncRegistry}

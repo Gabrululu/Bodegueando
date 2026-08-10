@@ -986,12 +986,12 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
 
       {isConnected && creditLineAddress && (
         <section className={cardClass}>
-          <h2 className={sectionTitleClass}>Prestar al pool de crédito</h2>
+          <h2 className={sectionTitleClass}>Prestar al fondo de crédito</h2>
           <p className="text-xs text-[#6b6d64]">
-            Cualquier cuenta puede prestar acá — las bodegas con certificado de crédito ZK
-            piden prestado con garantía reducida, y lo que pagan (con interés) vuelve al pool.
+            Cualquier cuenta puede prestar acá — las bodegas con certificado de crédito
+            piden prestado con menos garantía, y lo que pagan (con interés) vuelve al fondo.
           </p>
-          <p className="text-xs text-[#6b6d64]">Fondos disponibles en el pool: {formatSoles(Number(poolBalanceWei) / 1e18)}</p>
+          <p className="text-xs text-[#6b6d64]">Fondos disponibles: {formatSoles(Number(poolBalanceWei) / 1e18)}</p>
 
           <div className="flex items-center gap-2">
             <span className="text-sm text-[#6b6d64]">S/</span>
