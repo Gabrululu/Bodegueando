@@ -40,9 +40,9 @@ crédito con Zero-Knowledge ("mi score ≥ 700" sin revelar la cifra exacta) que
 en un click, y consumir directamente en una línea de crédito on-chain con menor garantía
 cuanto mejor el score probado — ver ARCHITECTURE.md, secciones CreditCertificate/CreditLine.
 
-**4. Onboarding sin fricción.** El usuario entra con su celular o correo, sin crear ni
-entender una wallet. Cada persona tiene una cuenta inteligente (ERC-4337) cuyo gas se paga con
-sus propios puntos.
+**4. Onboarding sin fricción.** El usuario entra con su celular, correo o passkey, sin crear
+ni entender una wallet. Cada persona tiene una cuenta inteligente (ERC-4337) cuyo gas se paga
+con sus propios puntos.
 
 **5. Notificaciones.** Un bot de Telegram avisa al bodeguero cuando le pagan y muestra su
 perfil —ventas, nivel de confianza, fiado disponible— todo en soles. (WhatsApp está en
@@ -52,10 +52,11 @@ pendiente, por eso Telegram salió primero — mismo objetivo, sin ese trámite 
 Alrededor de ese núcleo, la plataforma ya suma piezas adicionales construidas sobre el mismo
 historial on-chain: fiado con garantía parcial (`InvoiceEscrow`) para montos donde la bodega
 prefiere pedir un depósito, un catálogo de beneficios canjeables por puntos entre cualquier
-bodega de la red (`RewardsCatalog`), compras conjuntas entre bodegas para alcanzar el mínimo
-de un distribuidor (`GroupOrders`), un mapa de bodegas cercanas, y una vía inicial para
-programas sociales restringidos a gastarse solo en bodegas registradas (`BeneficioToken`).
-Detalle completo de cada una en ARCHITECTURE.md.
+bodega de la red (`RewardsCatalog`), compras conjuntas entre bodegas cercanas —de la misma
+zona, no de cualquier parte de la ciudad— para alcanzar el mínimo de un distribuidor
+(`GroupOrders`), un mapa de bodegas cercanas, y una vía inicial para programas sociales
+restringidos a gastarse solo en bodegas registradas (`BeneficioToken`). Detalle completo de
+cada una en ARCHITECTURE.md.
 
 El resultado no es una nueva forma de pagar, sino la infraestructura de confianza que falta
 detrás de un tipo de comercio que ya mueve más de 500 mil negocios en el Perú, muchos de ellos
@@ -154,6 +155,66 @@ familias que viven del día a día. Digitalizar lo que ya hacen —sin pedirles 
 cobran— es la base para que, con el tiempo, ese historial se traduzca en crédito real, en
 programas sociales mejor distribuidos, y en negocios de barrio con una posición más fuerte
 frente a lo que hoy solo tienen las grandes cadenas.
+
+## Modelo de negocio
+
+Bodegueando no le cobra a la bodega por lo que hoy ya la trae a la plataforma: cobrar, ganar
+puntos y construir su historial es gratis para ella, y así se queda. Cobrarle una comisión por
+transacción —aunque fuera menor al 2.5%–3.5% de un POS tradicional— rompería la promesa
+central del proyecto: que la bodega gane, no que pague, por dejar un registro verificable de
+su propio negocio. Ningún ingreso de la plataforma puede salir del bolsillo del bodeguero por
+su venta diaria.
+
+Entonces, ¿de dónde sale el dinero para cubrir lo que sí cuesta operar (gas patrocinado en
+Arbitrum vía `PuntosPaymaster`, cómputo del oráculo de IA, infraestructura)? De actores
+distintos al bodeguero-vendiendo, cada uno pagando por un valor nuevo y real que Bodegueando
+le crea:
+
+1. **Bancos y microfinancieras pagan por consultar el certificado de crédito**, no la bodega.
+   Es el mismo modelo que ya opera hoy: en Perú, Equifax/Infocorp no le cobra al consumidor
+   por su propio historial (tiene una consulta gratis al año, por ley) — cobra a bancos,
+   aseguradoras y financieras que consultan el reporte para decidir si prestan. La bodega
+   genera y usa su certificado gratis; una entidad financiera que quiere validar
+   "score ≥ 700" antes de prestarle paga por esa consulta, igual que ya le paga a un buró de
+   crédito tradicional — solo que con datos que hoy ese buró no tiene, porque nunca
+   existieron.
+2. **Un spread pequeño sobre el interés de `CreditLine`, solo cuando la bodega elige pedir
+   prestado.** Es un préstamo opcional, nunca una condición para vender — un servicio nuevo
+   (crédito con menos garantía gracias a su historial) que hoy no existe para este segmento a
+   ningún precio. El contrato ya cobra un interés fijo que hoy vuelve 100% al fondo de quien
+   prestó; quedarse con una porción pequeña de ese interés no le cuesta más a la bodega frente
+   a su alternativa real de hoy: no tener acceso a crédito, o pagarlo mucho más caro de forma
+   informal.
+3. **Distribuidores pagan una comisión de intermediación en las compras conjuntas
+   (`GroupOrders`), no las bodegas.** Hoy un distribuidor gasta en mandar un vendedor tienda
+   por tienda para juntar pedidos chicos — un costo real que ya paga. Bodegueando le entrega
+   la demanda ya agregada de varias bodegas de una misma zona: cobrarle una comisión menor a
+   lo que hoy gasta en ventas puerta a puerta es valor nuevo para él, no un costo para la
+   bodega, que de cualquier forma sale ganando con mejor precio.
+4. **Programas sociales (gobierno o municipalidad) pagan una cuota de administración**, no el
+   beneficiario ni la bodega. La filtración —que el beneficio llegue a quien no le
+   corresponde— en programas como Vaso de Leche llegó a superar el 70% en Lima según cifras
+   del MEF: un problema carísimo para el Estado. Una cuota de administración sobre
+   `BeneficioToken`, muy por debajo de lo que hoy se pierde en filtración e intermediarios, es
+   un ahorro neto para el programa, no un costo nuevo para nadie más.
+
+Lo que Bodegueando nunca va a cobrar: comisión por transacción de cobro (el corazón de la
+promesa frente a un POS tradicional), comisión por ganar o canjear puntos de cashback (son de
+la bodega y del cliente, no de la plataforma), ni comisión por construir o consultar su propio
+historial y score.
+
+**Nota de honestidad:** ninguno de estos cuatro mecanismos de cobro está activado hoy en los
+contratos desplegados — `CreditLine.sol` devuelve el 100% del interés al fondo de
+prestamistas, sin ningún corte de protocolo, y no hay ninguna tarifa on-chain para bancos,
+distribuidores o programas sociales todavía. Activarlos es sencillo (una constante de
+protocolo en el contrato, o un cobro fuera de la cadena para las consultas B2B/B2G), pero se
+dejó fuera de esta primera versión a propósito: primero construir la infraestructura y la
+confianza, después cobrar por lo que sí genera valor nuevo — nunca al revés.
+
+*Fuentes: [Equifax Perú — Reporte Infocorp](https://www.equifax.pe/personas/productos/reporte-infocorp-credito/)
+(modelo de cobro a entidades financieras, consulta gratuita anual del consumidor por Ley
+27489); MEF, "Caracterización del Programa del Vaso de Leche" y balance de políticas sociales
+(filtración de beneficios).*
 
 ## Estado actual
 
