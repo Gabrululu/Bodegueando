@@ -42,6 +42,7 @@ bodegueando/
 | **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
 | **InvoiceEscrow** (fiado con garantía parcial) | `0x8fe870ac497708E8a123e8083f3AF32cf5b6C645` | [ver código verificado](https://sepolia.arbiscan.io/address/0x8fe870ac497708E8a123e8083f3AF32cf5b6C645#code) |
 | **RewardsCatalog** (catálogo de beneficios) | `0x6151F3CD52680E0e31bBc75c763414E8d8c70b97` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6151F3CD52680E0e31bBc75c763414E8d8c70b97#code) |
+| **GroupOrders** (compras conjuntas entre bodegas) | `0xC765E6Dd487DD03BEEcf81dF1dE6d051Fa35fcf8` | [ver código verificado](https://sepolia.arbiscan.io/address/0xC765E6Dd487DD03BEEcf81dF1dE6d051Fa35fcf8#code) |
 
 `FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
 fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `PuntosPaymaster`
@@ -339,6 +340,62 @@ cashback reales con qué canjear):
 El camino de "código vencido" y "código ya usado" ya están cubiertos por los tests locales,
 así que esta corrida se enfocó en probar los dos tipos de beneficio completos (canje directo
 y sorteo con ganador real) con PUNTOS reales ganados por un pago real, no minteados a mano.
+
+### GroupOrders — compras conjuntas entre bodegas
+
+Última pieza del roadmap que era puramente técnica (no bloqueada por un tercero como Meta o
+un emisor regulado): una bodega alejada suele perder ventas porque el distribuidor no llega
+hasta ella, o porque el pedido mínimo que exige es más de lo que una sola bodega necesita.
+`GroupOrders.sol` deja que varias bodegas junten demanda hasta ese mínimo — bodega↔bodega,
+a diferencia de `InvoiceEscrow`/`RewardsCatalog` que son bodega↔cliente, así que esto solo
+vive en `BodegaOwnerPanel.tsx`, nada en `BuyerPanel.tsx`.
+
+- **`createGroupOrder(title, goal, pledgeDeadline, withdrawWindowSeconds)`** — cualquier
+  bodega registrada organiza un pedido grupal con una meta en ETH (stand-in de eSol, igual
+  que el resto de la app), hasta cuándo se puede aportar, y cuánto plazo de gracia tiene ella
+  misma para retirar una vez alcanzada la meta.
+- **`pledge(id)`** (`payable`) — cualquier bodega registrada aporta antes del cierre. Queda
+  registrado por bodega (no anónimo) — ese registro es lo que se usa fuera de la cadena para
+  repartir la mercadería proporcionalmente a lo que aportó cada una.
+- **`withdraw(id)`** — solo la organizadora, solo si ya cerró el período de aportes, se
+  alcanzó la meta, y todavía está dentro del plazo de gracia. Se lleva el fondo completo para
+  comprarle al distribuidor en la vida real (el distribuidor no es un actor on-chain).
+- **`refund(id)`** — cualquier bodega que aportó reclama su parte de vuelta si el pedido nunca
+  alcanzó la meta, o si la alcanzó pero la organizadora dejó vencer el plazo de gracia sin
+  retirar — el fondo nunca queda atrapado para siempre.
+
+Qué NO resuelve, a propósito: no modela unidades ni catálogo de productos (`goal` es un
+monto, no una cantidad de sacos de arroz — mismo criterio que `BeneficioToken.sol` para no
+simular un catálogo que no existe en el resto de la app), y no filtra por cercanía geográfica
+(no hay geolocalización en ningún lugar del proyecto, así que el descubrimiento de pedidos
+grupales es una lista global, no "bodegas cercanas").
+
+Cubierto con 19 tests unitarios nuevos en Foundry (creación/aporte gateados a bodegas
+registradas, retiro antes de tiempo/antes de meta/fuera de plazo revierten, retiro exitoso
+transfiere todo el fondo y bloquea reembolsos después, reembolso por meta no alcanzada,
+reembolso por plazo de gracia vencido sin retiro, doble reembolso revierte) — 85/85 en todo
+el repo.
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia** (dirección en la tabla de
+arriba). Corrida real con la bodega de siempre como organizadora y dos wallets de bodega
+descartables recién registradas (`registerSelf`) aportando, cubriendo los dos desenlaces
+posibles:
+
+1. **Meta alcanzada**: pedido por 0.002 ETH, dos bodegas aportan 0.0012 y 0.0008 ETH
+   ([tx `0x84d436...`](https://sepolia.arbiscan.io/tx/0x84d436612861e841cb26810f7d3a3f798695903cc660092d459d85a27c410289)
+   y [tx `0xc752b7...`](https://sepolia.arbiscan.io/tx/0xc752b799b0e40a6076e4388aa7c4030348d7998eb471fc4d3b66574f43b3a803))
+   hasta juntar exactamente los 0.002 ETH. Cerrado el período de aportes, la organizadora
+   retira ([tx `0xfb5536...`](https://sepolia.arbiscan.io/tx/0xfb5536870592938aa020f98c3e43b8eb7e06f4a7b7ee235907738ac32a2666b2)):
+   recibe el fondo completo, `withdrawn` pasa a `true`.
+2. **Meta no alcanzada**: un segundo pedido por 0.01 ETH solo recibe 0.001 ETH de aporte
+   ([tx `0x8cb7e7...`](https://sepolia.arbiscan.io/tx/0x8cb7e75f81bde9168e702a351a78e57946cd74618d851e8867e6dfa9c143748f)).
+   Pasado el cierre sin alcanzar la meta, esa bodega reclama su reembolso
+   ([tx `0x1e69c9...`](https://sepolia.arbiscan.io/tx/0x1e69c9bc3bb968e56ec25d07ec1d4f14c9f5dba79e9a23522765d375788708c2)):
+   recupera exactamente lo que aportó.
+
+El camino de "plazo de gracia vencido sin retiro" ya está cubierto por los tests locales, así
+que esta corrida se enfocó en los dos desenlaces principales (meta alcanzada vs. no
+alcanzada) con ETH real moviéndose entre tres cuentas distintas en Arbitrum Sepolia.
 
 ### Circuit breaker on-chain para el oráculo de IA (probado en vivo)
 
@@ -709,6 +766,43 @@ directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y preca
 `BuyerPanel`) o escribe el código a mano como respaldo. Ninguno de los dos paneles muestra un
 `0x...` en ningún lado.
 
+### Mapa de bodegas cercanas ([mapcn.dev](https://www.mapcn.dev))
+
+`GroupOrders` y `RewardsCatalog` habían quedado documentados como listas globales, no
+filtradas por cercanía, porque no había dónde guardar ni mostrar la ubicación de una bodega.
+Este mapa cierra ese hueco usando [mapcn](https://www.mapcn.dev) — componentes de mapa para
+React sobre MapLibre GL, tiles gratis de CARTO (sin API key), instalados vía el CLI de
+shadcn/ui (`pnpm dlx shadcn@latest add @mapcn/map`, que a su vez necesitó
+`shadcn@latest init` primero — este proyecto no tenía shadcn/ui instalado).
+
+- **Ubicación como metadata de UX, no on-chain**: mismo criterio que los códigos de 6 dígitos
+  (`lib/bodegaCodes.ts`) — nadie necesita verificación trustless de un pin en un mapa. Vive en
+  `lib/bodegaLocations.ts` (mismo patrón `readJsonStore`/`writeJsonStore` de `lib/kv.ts`,
+  Upstash con fallback a archivo) y `app/api/bodega/location/route.ts` (`POST` guarda/
+  actualiza, `GET` sin parámetros devuelve la lista completa para alimentar el mapa, `GET
+  ?address=` precarga la propia).
+- **`BodegaOwnerPanel.tsx`**, sección "Tu ubicación en el mapa": botón que pide
+  `navigator.geolocation.getCurrentPosition` para centrar el mapa, con un pin arrastrable
+  (`MapMarker draggable`) para ajustarlo a mano si el GPS no cae exacto.
+- **`BuyerPanel.tsx`**, sección "Bodegas cercanas": geolocaliza al cliente para centrar el
+  mapa (si deniega el permiso, centra en Lima por defecto), trae todas las bodegas con
+  ubicación guardada y pone un pin por cada una; el popup de cada pin resuelve su código de 6
+  dígitos (mismo truco que ya usa `RewardsCatalog` en el frontend: `POST /api/bodega/code`
+  crea-o-devuelve el código de cualquier dirección) y linkea a `/pagar/[code]`, la misma ruta
+  que ya usa el QR de la bodega — no hizo falta construir nada nuevo ahí.
+- No hay "cercanía" calculada ni ordenada por distancia: el mapa mismo, centrado en el
+  cliente, ya comunica visualmente qué bodegas están cerca — misma simplicidad deliberada que
+  el resto del proyecto.
+
+**Dos problemas reales encontrados y arreglados al instalar mapcn, no simulados:**
+`shadcn@latest init` pisó la paleta propia de la app (`--background`/`--foreground` pasaron a
+blanco/negro genérico de shadcn) y rompió `--font-sans` (quedó autorreferenciado en vez de
+apuntar a `--font-geist-sans`) — se corrigió a mano en `app/globals.css`, dejando el resto del
+scaffolding de shadcn (que el popup del mapa sí usa) intacto. Además, el `components/ui/map.tsx`
+que genera el registro de mapcn importa un *default export* de `maplibre-gl` que la versión
+6.2.0 (la que instala hoy) ya no tiene — se cambió a `import * as MapLibreGL` para que
+compile.
+
 ## Atajos conscientes de hackathon
 
 - **eSol → ETH nativo de testnet.** `PaymentRouter.receivePayment` usa `msg.value`
@@ -794,6 +888,8 @@ marca qué parte de esto ya está construido y probado en testnet.
    - `RewardsCatalog.sol` — catálogo de beneficios canjeables por PUNTOS, propio de cada
      bodega y canjeable en cualquier bodega de la red (desplegado, verificado y probado en
      vivo — ver "RewardsCatalog").
+   - `GroupOrders.sol` — compras conjuntas entre bodegas para alcanzar el mínimo de un
+     distribuidor (desplegado, verificado y probado en vivo — ver "GroupOrders").
 4. **Backend y servicios** — API que orquesta creación de smart account, llamadas a
    contratos, scoring y notificaciones; base de datos para perfil/catálogo/métricas y
    cache de saldos para que la UX se sienta instantánea; motor de riesgo off-chain
@@ -843,13 +939,14 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
 | Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS. Incluye dos fixes encontrados en vivo: PUNTOS de bienvenida para bodegas, y que un primer intento fallido ya no quema la transacción gratis, ver "Login sin wallet..." |
 | Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
+| Mapa de bodegas cercanas (mapcn.dev / MapLibre) | ✅ Funcional — cada bodega guarda su ubicación, el cliente ve un mapa con todas y puede pagar directo desde el pin, ver "Mapa de bodegas cercanas" |
 | Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
 | `InvoiceEscrow` (fiado con garantía parcial) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (11/11 Rust, 43/43 Solidity) — ver "InvoiceEscrow" |
 | `RewardsCatalog` (catálogo de beneficios canjeables entre bodegas) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (23/23 Solidity, 66/66 en todo el repo) — ver "RewardsCatalog" |
 | Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
 | `ePEN` (token propio, redimible 1:1 por soles reales) | 🔜 Roadmap — hoy la app solo convierte el monto a soles para mostrarlo (ver "Atajos"); un `ePEN` real necesitaría un emisor regulado que respalde cada token con soles en custodia (como una stablecoin bancaria), que es un problema de compliance y de rampas fiat, no solo de contrato. Construir el contrato ERC-20 en sí es trivial; lo que falta es esa pieza, y no vale la pena simularla con una paridad falsa que parezca más sólida de lo que es |
 | Score crediticio del bodeguero con Zero-Knowledge (no del cliente — del propio negocio) | 🔜 Roadmap — hoy el historial on-chain demuestra si los *clientes* de una bodega pagan bien; falta la pieza inversa, que el bodeguero use ese mismo historial de ventas para probarle su propia solidez a un banco/proveedor sin entregarle el detalle de sus ventas. Necesita una prueba ZK sobre los datos ya on-chain (ej. "mis ventas superan X" sin revelar la cifra exacta) — es la pieza que falta para que el historial sea útil también *hacia afuera*, no solo hacia sus propios clientes |
-| Compras conjuntas entre bodegas (pedidos grupales cuando el distribuidor no llega) | 🔜 Roadmap — bodegas alejadas pierden ventas porque el distribuidor no llega hasta ellas o el pedido mínimo es mayor a lo que una sola bodega necesita; coordinar la demanda de varias bodegas cercanas para alcanzar ese mínimo es un problema de coordinación (y potencialmente de escrow) que hoy no está resuelto |
+| Compras conjuntas entre bodegas (`GroupOrders.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (19/19 Solidity, 85/85 en todo el repo) — ver "GroupOrders" |
 
 ### Flujo de demo objetivo (jurado)
 
@@ -963,6 +1060,16 @@ diferencia de `InvoiceEscrow` no necesita wiring posterior en ningún otro contr
 cd contracts/solidity
 PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> \
   forge script script/DeployRewardsCatalog.s.sol:DeployRewardsCatalog \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+Deploy de `GroupOrders` (requiere solo `PaymentRouter` ya desplegado; sin wiring posterior en
+ningún otro contrato):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployGroupOrders.s.sol:DeployGroupOrders \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
 

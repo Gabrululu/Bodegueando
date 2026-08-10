@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { parseEther, type Address } from "viem";
 import { useReadContract, useReadContracts } from "wagmi";
+import { Map, MapMarker, MarkerContent, MarkerPopup } from "@/components/ui/map";
 import {
   fiadoScoringAbi,
   fiadoScoringAddress,
@@ -72,6 +73,46 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [isRedeemConfirmed, setIsRedeemConfirmed] = useState(false);
   const [faucetMessage, setFaucetMessage] = useState<string | null>(null);
+  const [myLat, setMyLat] = useState<number | null>(null);
+  const [myLng, setMyLng] = useState<number | null>(null);
+  const [nearbyBodegas, setNearbyBodegas] = useState<Array<{ address: string; lat: number; lng: number }>>([]);
+  const [bodegaCodesByLocationAddress, setBodegaCodesByLocationAddress] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setMyLat(position.coords.latitude);
+        setMyLng(position.coords.longitude);
+      },
+      () => {
+        // Denied or unavailable — the map just falls back to centering on Lima.
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/bodega/location")
+      .then((res) => res.json())
+      .then((data) => setNearbyBodegas(data.locations ?? []))
+      .catch(() => setNearbyBodegas([]));
+  }, []);
+
+  useEffect(() => {
+    const uncached = nearbyBodegas.map((b) => b.address).filter((a) => !(a in bodegaCodesByLocationAddress));
+    if (uncached.length === 0) return;
+    uncached.forEach((bodegaAddr) => {
+      fetch("/api/bodega/code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: bodegaAddr }),
+      })
+        .then((res) => res.json())
+        .then((data) => setBodegaCodesByLocationAddress((prev) => ({ ...prev, [bodegaAddr]: data.code ?? "?" })))
+        .catch(() => setBodegaCodesByLocationAddress((prev) => ({ ...prev, [bodegaAddr]: "?" })));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nearbyBodegas.map((b) => b.address).join(",")]);
 
   const contractsConfigured = Boolean(fiadoScoringAddress && paymentRouterAddress);
 
@@ -596,6 +637,32 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
           {faucetMessage}
         </p>
       )}
+
+      {nearbyBodegas.length > 0 && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Bodegas cercanas</h2>
+          <div className="h-[280px] w-full overflow-hidden rounded-xl border border-black/10">
+            <Map center={[myLng ?? -77.0428, myLat ?? -12.0464]} zoom={myLat !== null ? 14 : 11}>
+              {nearbyBodegas.map((b) => (
+                <MapMarker key={b.address} longitude={b.lng} latitude={b.lat}>
+                  <MarkerContent />
+                  <MarkerPopup>
+                    <div className="flex flex-col gap-2 p-2 text-center">
+                      <p className="text-xs text-[#6b6d64]">Bodega #{bodegaCodesByLocationAddress[b.address] ?? "…"}</p>
+                      {bodegaCodesByLocationAddress[b.address] && (
+                        <a href={`/pagar/${bodegaCodesByLocationAddress[b.address]}`} className={outlineButtonClass}>
+                          Pagar acá
+                        </a>
+                      )}
+                    </div>
+                  </MarkerPopup>
+                </MapMarker>
+              ))}
+            </Map>
+          </div>
+        </section>
+      )}
+
       <div className="flex flex-col gap-1">
         <label htmlFor="bodega" className="text-sm font-medium text-[#0a0a0b]">
           Código de la bodega

@@ -1,0 +1,365 @@
+{
+  "abi": [
+    {
+      "type": "constructor",
+      "inputs": [
+        {
+          "name": "_bodegaRegistry",
+          "type": "address",
+          "internalType": "contract IBodegaRegistry"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "bodegaRegistry",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IBodegaRegistry"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "createGroupOrder",
+      "inputs": [
+        {
+          "name": "title",
+          "type": "string",
+          "internalType": "string"
+        },
+        {
+          "name": "goal",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "pledgeDeadline",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "withdrawWindowSeconds",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "groupOrders",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "organizer",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "internalType": "string"
+        },
+        {
+          "name": "goal",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "pledged",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "pledgeDeadline",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "withdrawWindowSeconds",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "withdrawn",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "nextGroupOrderId",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "pledge",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "pledges",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "refund",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "withdraw",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "event",
+      "name": "GroupOrderCreated",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "organizer",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "goal",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "pledgeDeadline",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "withdrawWindowSeconds",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "Pledged",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "bodega",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "totalPledged",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "Refunded",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "bodega",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "Withdrawn",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "organizer",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "error",
+      "name": "AlreadyWithdrawn",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "GoalNotReached",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidDeadline",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotABodega",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotOrganizer",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotYetDue",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotYetRefundable",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NothingToRefund",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "OrderNotFound",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "PledgingClosed",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "WithdrawWindowExpired",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ZeroAmount",
+      "inputs": []
+    }
+  ]
+}

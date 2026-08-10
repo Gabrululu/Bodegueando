@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { parseEther, type Address } from "viem";
 import { useReadContract, useReadContracts } from "wagmi";
 import { QRCodeSVG } from "qrcode.react";
+import { Map, MapMarker, MarkerContent } from "@/components/ui/map";
 import {
   fiadoScoringAbi,
   fiadoScoringAddress,
@@ -14,6 +15,8 @@ import {
   invoiceEscrowAddress,
   rewardsCatalogAbi,
   rewardsCatalogAddress,
+  groupOrdersAbi,
+  groupOrdersAddress,
 } from "@/lib/contracts";
 import { RISK_COLOR, RISK_LABEL, confianzaLabel, type AiRecommendation } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -96,6 +99,18 @@ export function BodegaOwnerPanel() {
   const [isValidatingCode, setIsValidatingCode] = useState(false);
   const [validateError, setValidateError] = useState<string | null>(null);
   const [validateConfirmed, setValidateConfirmed] = useState(false);
+  const [groupOrderTitle, setGroupOrderTitle] = useState("");
+  const [groupOrderGoalSoles, setGroupOrderGoalSoles] = useState("500");
+  const [groupOrderPledgeDays, setGroupOrderPledgeDays] = useState("7");
+  const [groupOrderWithdrawDays, setGroupOrderWithdrawDays] = useState("7");
+  const [isCreatingGroupOrder, setIsCreatingGroupOrder] = useState(false);
+  const [createGroupOrderError, setCreateGroupOrderError] = useState<string | null>(null);
+  const [createGroupOrderConfirmed, setCreateGroupOrderConfirmed] = useState(false);
+  const [pledgeSolesByOrder, setPledgeSolesByOrder] = useState<Record<number, string>>({});
+  const [pledgingOrderId, setPledgingOrderId] = useState<number | null>(null);
+  const [withdrawingOrderId, setWithdrawingOrderId] = useState<number | null>(null);
+  const [refundingOrderId, setRefundingOrderId] = useState<number | null>(null);
+  const [groupOrderActionError, setGroupOrderActionError] = useState<string | null>(null);
   const [beneficiaryCodeInput, setBeneficiaryCodeInput] = useState("");
   const [beneficiaryAddress, setBeneficiaryAddress] = useState<Address | undefined>(undefined);
   const [isResolvingBeneficiary, setIsResolvingBeneficiary] = useState(false);
@@ -107,6 +122,66 @@ export function BodegaOwnerPanel() {
   const [issueConfirmed, setIssueConfirmed] = useState(false);
 
   const { formatSoles, solesToEth } = useExchangeRate();
+
+  const [myLat, setMyLat] = useState<number | null>(null);
+  const [myLng, setMyLng] = useState<number | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [isSavingLocation, setIsSavingLocation] = useState(false);
+  const [locationSaved, setLocationSaved] = useState(false);
+
+  useEffect(() => {
+    if (!address) return;
+    fetch(`/api/bodega/location?address=${address}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.location) {
+          setMyLat(data.location.lat);
+          setMyLng(data.location.lng);
+        }
+      })
+      .catch(() => {});
+  }, [address]);
+
+  function handleLocateMe() {
+    if (!navigator.geolocation) {
+      setLocationError("Tu navegador no soporta geolocalización.");
+      return;
+    }
+    setIsLocating(true);
+    setLocationError(null);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setMyLat(position.coords.latitude);
+        setMyLng(position.coords.longitude);
+        setIsLocating(false);
+      },
+      () => {
+        setLocationError("No pudimos acceder a tu ubicación. Revisa los permisos del navegador.");
+        setIsLocating(false);
+      },
+    );
+  }
+
+  async function handleSaveLocation() {
+    if (!address || myLat === null || myLng === null) return;
+    setIsSavingLocation(true);
+    setLocationError(null);
+    setLocationSaved(false);
+    try {
+      const res = await fetch("/api/bodega/location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address, lat: myLat, lng: myLng }),
+      });
+      if (!res.ok) throw new Error("failed");
+      setLocationSaved(true);
+    } catch {
+      setLocationError("No se pudo guardar tu ubicación. Intenta de nuevo.");
+    } finally {
+      setIsSavingLocation(false);
+    }
+  }
 
   useEffect(() => {
     if (!address) return;
@@ -379,6 +454,132 @@ export function BodegaOwnerPanel() {
       setValidateError("Código inválido, vencido, o ya entregado.");
     } finally {
       setIsValidatingCode(false);
+    }
+  }
+
+  const groupOrderCountQuery = useReadContract({
+    address: groupOrdersAddress,
+    abi: groupOrdersAbi,
+    functionName: "nextGroupOrderId",
+    query: { enabled: Boolean(groupOrdersAddress) },
+  });
+  const groupOrderCount = Number((groupOrderCountQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const groupOrdersQuery = useReadContracts({
+    contracts: Array.from({ length: groupOrderCount }, (_, i) => ({
+      address: groupOrdersAddress,
+      abi: groupOrdersAbi,
+      functionName: "groupOrders",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(groupOrdersAddress) && groupOrderCount > 0 },
+  });
+
+  const myPledgesQuery = useReadContracts({
+    contracts: Array.from({ length: groupOrderCount }, (_, i) => ({
+      address: groupOrdersAddress,
+      abi: groupOrdersAbi,
+      functionName: "pledges",
+      args: [BigInt(i), address ?? "0x0000000000000000000000000000000000000000"],
+    })),
+    query: { enabled: Boolean(groupOrdersAddress) && groupOrderCount > 0 && Boolean(address) },
+  });
+
+  const allGroupOrders = (groupOrdersQuery.data ?? [])
+    .map((result, i) => {
+      if (result.status !== "success") return null;
+      const [organizer, title, goal, pledged, pledgeDeadline, withdrawWindowSeconds, withdrawn] = result.result as [
+        Address,
+        string,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        boolean,
+      ];
+      const myPledge = (myPledgesQuery.data?.[i]?.status === "success" ? (myPledgesQuery.data[i].result as bigint) : BigInt(0)) ?? BigInt(0);
+      return { id: i, organizer, title, goal, pledged, pledgeDeadline, withdrawWindowSeconds, withdrawn, myPledge };
+    })
+    .filter((o): o is NonNullable<typeof o> => o !== null)
+    .reverse();
+
+  async function handleCreateGroupOrder() {
+    if (!groupOrdersAddress || !smartAccountClient || !address || !groupOrderTitle.trim()) return;
+    setIsCreatingGroupOrder(true);
+    setCreateGroupOrderError(null);
+    setCreateGroupOrderConfirmed(false);
+    try {
+      const goalWei = parseEther(solesToEth(Number(groupOrderGoalSoles || "0")).toFixed(18));
+      const pledgeDeadline = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, Math.round(Number(groupOrderPledgeDays || "0"))) * 86400);
+      const withdrawWindowSeconds = BigInt(Math.max(1, Math.round(Number(groupOrderWithdrawDays || "0"))) * 86400);
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: groupOrdersAddress,
+          abi: groupOrdersAbi,
+          functionName: "createGroupOrder",
+          args: [groupOrderTitle.trim(), goalWei, pledgeDeadline, withdrawWindowSeconds],
+        },
+      ]);
+      setCreateGroupOrderConfirmed(true);
+      setGroupOrderTitle("");
+      groupOrderCountQuery.refetch();
+      groupOrdersQuery.refetch();
+    } catch {
+      setCreateGroupOrderError("No se pudo crear el pedido grupal. Intenta de nuevo.");
+    } finally {
+      setIsCreatingGroupOrder(false);
+    }
+  }
+
+  async function handlePledge(id: number) {
+    if (!groupOrdersAddress || !smartAccountClient || !address) return;
+    setPledgingOrderId(id);
+    setGroupOrderActionError(null);
+    try {
+      const amountWei = parseEther(solesToEth(Number(pledgeSolesByOrder[id] || "0")).toFixed(18));
+      await sendAndWait(smartAccountClient, address, [
+        { address: groupOrdersAddress, abi: groupOrdersAbi, functionName: "pledge", args: [BigInt(id)], value: amountWei },
+      ]);
+      setPledgeSolesByOrder((prev) => ({ ...prev, [id]: "" }));
+      groupOrdersQuery.refetch();
+      myPledgesQuery.refetch();
+    } catch {
+      setGroupOrderActionError("No se pudo aportar. Revisa que el pedido siga abierto.");
+    } finally {
+      setPledgingOrderId(null);
+    }
+  }
+
+  async function handleWithdrawGroupOrder(id: number) {
+    if (!groupOrdersAddress || !smartAccountClient || !address) return;
+    setWithdrawingOrderId(id);
+    setGroupOrderActionError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: groupOrdersAddress, abi: groupOrdersAbi, functionName: "withdraw", args: [BigInt(id)] },
+      ]);
+      groupOrdersQuery.refetch();
+    } catch {
+      setGroupOrderActionError("No se pudo retirar. Revisa que ya se haya alcanzado la meta y que el plazo siga vigente.");
+    } finally {
+      setWithdrawingOrderId(null);
+    }
+  }
+
+  async function handleRefundGroupOrder(id: number) {
+    if (!groupOrdersAddress || !smartAccountClient || !address) return;
+    setRefundingOrderId(id);
+    setGroupOrderActionError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: groupOrdersAddress, abi: groupOrdersAbi, functionName: "refund", args: [BigInt(id)] },
+      ]);
+      groupOrdersQuery.refetch();
+      myPledgesQuery.refetch();
+    } catch {
+      setGroupOrderActionError("Todavía no se puede reembolsar este pedido.");
+    } finally {
+      setRefundingOrderId(null);
     }
   }
 
@@ -749,6 +950,46 @@ export function BodegaOwnerPanel() {
       </section>
 
       <section className={cardClass}>
+        <h2 className={sectionTitleClass}>Tu ubicación en el mapa</h2>
+        <p className="text-xs text-[#6b6d64]">
+          Para que los clientes te encuentren en &quot;Bodegas cercanas&quot;. Arrastra el pin
+          para ajustarlo si no cae exacto.
+        </p>
+        <div className="h-[260px] w-full overflow-hidden rounded-xl border border-black/10">
+          <Map key={`${myLat ?? "default"}-${myLng ?? "default"}`} center={[myLng ?? -77.0428, myLat ?? -12.0464]} zoom={myLat !== null ? 15 : 11}>
+            {myLat !== null && myLng !== null && (
+              <MapMarker
+                longitude={myLng}
+                latitude={myLat}
+                draggable
+                onDragEnd={({ lng, lat }) => {
+                  setMyLng(lng);
+                  setMyLat(lat);
+                }}
+              >
+                <MarkerContent />
+              </MapMarker>
+            )}
+          </Map>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleLocateMe} disabled={isLocating} className={outlineButtonClass}>
+            {isLocating ? "Ubicando..." : "Usar mi ubicación actual"}
+          </button>
+          <button
+            onClick={handleSaveLocation}
+            disabled={isSavingLocation || myLat === null || myLng === null}
+            className={primaryButtonClass}
+            style={primaryButtonStyle}
+          >
+            {isSavingLocation ? "Guardando..." : "Guardar ubicación"}
+          </button>
+        </div>
+        {locationError && <p className="text-xs text-red-500">{locationError}</p>}
+        {locationSaved && <p className="text-xs text-green-600">¡Listo! Ya apareces en el mapa ✓</p>}
+      </section>
+
+      <section className={cardClass}>
         <h2 className={sectionTitleClass}>Tus ventas</h2>
         {historyQuery.isLoading ? (
           <p className="text-xs text-[#6b6d64]">Cargando tu historial…</p>
@@ -1113,6 +1354,140 @@ export function BodegaOwnerPanel() {
             {validateError && <p className="text-xs text-red-500">{validateError}</p>}
             {validateConfirmed && <p className="text-xs text-green-600">¡Listo! Canje entregado ✓</p>}
           </div>
+        </section>
+      )}
+
+      {groupOrdersAddress && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Compras conjuntas entre bodegas</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Si tu distribuidor pide un mínimo que solo no alcanzas, arma un pedido grupal.
+            Otras bodegas aportan; si se llega a la meta, retiras el fondo para comprarle en la
+            vida real y repartir según lo que aportó cada una. Si no se llega a la meta, cada
+            una recupera lo suyo.
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <input
+              value={groupOrderTitle}
+              onChange={(e) => setGroupOrderTitle(e.target.value)}
+              placeholder="Ej: Arroz + aceite — distribuidor de Miraflores"
+              className="rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+            />
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-[#6b6d64]">Meta en soles</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="10"
+                value={groupOrderGoalSoles}
+                onChange={(e) => setGroupOrderGoalSoles(e.target.value)}
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-[#6b6d64]">Se puede aportar por (días)</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                step="1"
+                value={groupOrderPledgeDays}
+                onChange={(e) => setGroupOrderPledgeDays(e.target.value)}
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-[#6b6d64]">Plazo para retirar tras cerrar (días)</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                step="1"
+                value={groupOrderWithdrawDays}
+                onChange={(e) => setGroupOrderWithdrawDays(e.target.value)}
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+              />
+            </div>
+            <button
+              onClick={handleCreateGroupOrder}
+              disabled={isCreatingGroupOrder || !groupOrderTitle.trim()}
+              className={primaryButtonClass}
+              style={primaryButtonStyle}
+            >
+              {isCreatingGroupOrder ? "Creando..." : "Organizar pedido grupal"}
+            </button>
+            {createGroupOrderError && <p className="text-xs text-red-500">{createGroupOrderError}</p>}
+            {createGroupOrderConfirmed && <p className="text-xs text-green-600">¡Listo! Ya está publicado ✓</p>}
+          </div>
+
+          {allGroupOrders.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-[#0a0a0b]">Pedidos grupales de la red</p>
+              {allGroupOrders.map((o) => {
+                const isMine = address && o.organizer.toLowerCase() === (address as string).toLowerCase();
+                return (
+                  <div key={o.id} className={highlightBoxClass}>
+                    <p className="text-sm font-medium text-[#0a0a0b]">{o.title}</p>
+                    <p className="text-xs text-[#6b6d64]">
+                      {formatSoles(Number(o.pledged) / 1e18)} de {formatSoles(Number(o.goal) / 1e18)} · cierra{" "}
+                      {formatPaymentDate(Number(o.pledgeDeadline))}
+                      {isMine ? " · tu pedido" : ""}
+                      {o.withdrawn ? " · retirado" : ""}
+                    </p>
+                    {o.myPledge > BigInt(0) && (
+                      <p className="text-xs text-[#6b6d64]">Aportaste: {formatSoles(Number(o.myPledge) / 1e18)}</p>
+                    )}
+
+                    {!o.withdrawn && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className="text-sm text-[#6b6d64]">S/</span>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          min="0"
+                          step="1"
+                          value={pledgeSolesByOrder[o.id] ?? ""}
+                          onChange={(e) => setPledgeSolesByOrder((prev) => ({ ...prev, [o.id]: e.target.value }))}
+                          className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                        />
+                        <button
+                          onClick={() => handlePledge(o.id)}
+                          disabled={pledgingOrderId === o.id}
+                          className={outlineButtonClass}
+                        >
+                          {pledgingOrderId === o.id ? "..." : "Aportar"}
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="mt-2 flex gap-2">
+                      {isMine && !o.withdrawn && (
+                        <button
+                          onClick={() => handleWithdrawGroupOrder(o.id)}
+                          disabled={withdrawingOrderId === o.id}
+                          className={outlineButtonClass}
+                        >
+                          {withdrawingOrderId === o.id ? "Retirando..." : "Retirar fondo (si ya se alcanzó la meta)"}
+                        </button>
+                      )}
+                      {o.myPledge > BigInt(0) && !o.withdrawn && (
+                        <button
+                          onClick={() => handleRefundGroupOrder(o.id)}
+                          disabled={refundingOrderId === o.id}
+                          className={outlineButtonClass}
+                        >
+                          {refundingOrderId === o.id ? "..." : "Reclamar reembolso"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {groupOrderActionError && <p className="text-xs text-red-500">{groupOrderActionError}</p>}
+            </div>
+          )}
         </section>
       )}
 

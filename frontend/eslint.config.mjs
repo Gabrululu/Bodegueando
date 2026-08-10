@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored shadcn/mapcn component code (components/ui) — copied in by their CLIs, not
+    // hand-written to this project's lint rules. Same reasoning as ignoring node_modules.
+    "components/ui/**",
   ]),
 ]);
 
