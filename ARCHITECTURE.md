@@ -368,11 +368,33 @@ vive en `BodegaOwnerPanel.tsx`, nada en `BuyerPanel.tsx`.
   alcanzó la meta, o si la alcanzó pero la organizadora dejó vencer el plazo de gracia sin
   retirar — el fondo nunca queda atrapado para siempre.
 
+**Filtro por cercanía (frontend, no en el contrato).** Un pedido grupal solo tiene sentido
+entre bodegas realmente cerca — alguien tiene que ir a recoger la mercadería a un único punto
+de entrega, así que juntar demanda con una bodega de otro distrito no resuelve nada. El
+contrato en sí sigue sin ningún concepto de ubicación a propósito (mismo criterio que el resto
+del proyecto: la ubicación de una bodega es metadata de UX, no algo que necesite ser
+trustless, así que vive fuera de la cadena — ver "Mapa de bodegas cercanas" más abajo). El
+filtro se resuelve enteramente en `BodegaOwnerPanel.tsx`, reusando esa misma ubicación:
+
+- Al listar pedidos, cada uno se cruza con la ubicación guardada de su organizadora
+  (`GET /api/bodega/location`, la misma fuente que alimenta el mapa) y se calcula la distancia
+  a la bodega que está mirando la lista (`lib/distance.ts`, fórmula de Haversine — no hace
+  falta precisión de rutas reales para esto).
+- Un selector de radio (1 km / 2 km / 5 km / Todos, por defecto 2 km — la escala de "misma
+  urbanización" que motivó este filtro) determina qué se muestra como "cerca de ti".
+- Si la propia bodega todavía no guardó su ubicación, no hay desde dónde medir distancia —
+  en ese caso se muestra la lista completa sin filtrar, con un aviso invitando a guardarla, en
+  vez de esconder pedidos que sí podrían ser relevantes.
+- Los pedidos cuya organizadora no guardó ubicación quedan aparte, en una sección colapsada
+  ("bodegas sin ubicación registrada") — nunca mezclados silenciosamente en la lista de
+  "cercanos", porque no hay forma de saber si están cerca o no.
+
 Qué NO resuelve, a propósito: no modela unidades ni catálogo de productos (`goal` es un
 monto, no una cantidad de sacos de arroz — mismo criterio que `BeneficioToken.sol` para no
-simular un catálogo que no existe en el resto de la app), y no filtra por cercanía geográfica
-(no hay geolocalización en ningún lugar del proyecto, así que el descubrimiento de pedidos
-grupales es una lista global, no "bodegas cercanas").
+simular un catálogo que no existe en el resto de la app). El filtro de cercanía es solo de
+descubrimiento (qué se muestra primero) — el contrato sigue aceptando un aporte de cualquier
+bodega registrada sin importar su distancia, así que no reemplaza el criterio humano de la
+organizadora al decidir a quién repartirle si alguien lejano igual aporta.
 
 Cubierto con 19 tests unitarios nuevos en Foundry (creación/aporte gateados a bodegas
 registradas, retiro antes de tiempo/antes de meta/fuera de plazo revierten, retiro exitoso
@@ -877,7 +899,11 @@ directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y preca
 
 `GroupOrders` y `RewardsCatalog` habían quedado documentados como listas globales, no
 filtradas por cercanía, porque no había dónde guardar ni mostrar la ubicación de una bodega.
-Este mapa cierra ese hueco usando [mapcn](https://www.mapcn.dev) — componentes de mapa para
+Este mapa cierra ese hueco (y esa misma ubicación es la que después usa `GroupOrders` para
+filtrar por radio — ver "GroupOrders" más arriba; `RewardsCatalog` sigue siendo una lista
+global sin filtrar, a propósito: un canje de puntos no depende de ir a recoger nada a un punto
+físico compartido, así que la urgencia de filtrar por cercanía no aplica igual) usando
+[mapcn](https://www.mapcn.dev) — componentes de mapa para
 React sobre MapLibre GL, tiles gratis de CARTO (sin API key), instalados vía el CLI de
 shadcn/ui (`pnpm dlx shadcn@latest add @mapcn/map`, que a su vez necesitó
 `shadcn@latest init` primero — este proyecto no tenía shadcn/ui instalado).
@@ -897,9 +923,11 @@ shadcn/ui (`pnpm dlx shadcn@latest add @mapcn/map`, que a su vez necesitó
   dígitos (mismo truco que ya usa `RewardsCatalog` en el frontend: `POST /api/bodega/code`
   crea-o-devuelve el código de cualquier dirección) y linkea a `/pagar/[code]`, la misma ruta
   que ya usa el QR de la bodega — no hizo falta construir nada nuevo ahí.
-- No hay "cercanía" calculada ni ordenada por distancia: el mapa mismo, centrado en el
-  cliente, ya comunica visualmente qué bodegas están cerca — misma simplicidad deliberada que
-  el resto del proyecto.
+- En el mapa del comprador no hay "cercanía" calculada ni ordenada por distancia: el mapa
+  mismo, centrado en el cliente, ya comunica visualmente qué bodegas están cerca — misma
+  simplicidad deliberada que el resto del proyecto. `GroupOrders` sí calcula distancia real
+  (`lib/distance.ts`, Haversine) porque ahí "cerca" decide qué se muestra primero, no solo qué
+  se ve en un mapa — ver "GroupOrders" más arriba.
 
 **Dos problemas reales encontrados y arreglados al instalar mapcn, no simulados:**
 `shadcn@latest init` pisó la paleta propia de la app (`--background`/`--foreground` pasaron a
@@ -1052,7 +1080,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Mapa de bodegas cercanas (mapcn.dev / MapLibre) | ✅ Funcional — cada bodega guarda su ubicación, el cliente ve un mapa con todas y puede pagar directo desde el pin, ver "Mapa de bodegas cercanas" |
 | `InvoiceEscrow` (fiado con garantía parcial) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (11/11 Rust, 43/43 Solidity) — ver "InvoiceEscrow" |
 | `RewardsCatalog` (catálogo de beneficios canjeables entre bodegas) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (23/23 Solidity, 66/66 en todo el repo) — ver "RewardsCatalog" |
-| Compras conjuntas entre bodegas (`GroupOrders.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (19/19 Solidity, 85/85 en todo el repo) — ver "GroupOrders" |
+| Compras conjuntas entre bodegas (`GroupOrders.sol`), filtradas por cercanía en el frontend | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (19/19 Solidity, 85/85 en todo el repo) — ver "GroupOrders" |
 | Score crediticio del bodeguero con Zero-Knowledge (`CreditCertificate.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia — prueba ZK real generada y verificada on-chain, ver "CreditCertificate" |
 | Línea de crédito on-chain que consume el certificado ZK (`CreditLine.sol`) | ✅ Desplegado, verificado y probado en vivo — préstamo con garantía reducida (50% en tier 500) y repago, ver "CreditLine" |
 | Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |

@@ -25,6 +25,7 @@ import {
 import { RISK_COLOR, RISK_LABEL, confianzaLabel, type AiRecommendation } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
 import { sendAndWait, useSmartAccountClient } from "@/lib/smartAccount";
+import { distanceKm } from "@/lib/distance";
 
 /**
  * Vista del bodeguero: su propio código para cobrar, el interruptor de fiado, y
@@ -143,6 +144,10 @@ export function BodegaOwnerPanel() {
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isSavingLocation, setIsSavingLocation] = useState(false);
   const [locationSaved, setLocationSaved] = useState(false);
+  const [bodegaLocationsByAddress, setBodegaLocationsByAddress] = useState<Record<string, { lat: number; lng: number }>>(
+    {},
+  );
+  const [groupOrderRadiusKm, setGroupOrderRadiusKm] = useState<number | "all">(2);
 
   useEffect(() => {
     if (!address) return;
@@ -156,6 +161,17 @@ export function BodegaOwnerPanel() {
       })
       .catch(() => {});
   }, [address]);
+
+  useEffect(() => {
+    fetch("/api/bodega/location")
+      .then((res) => res.json())
+      .then((data) => {
+        const byAddress: Record<string, { lat: number; lng: number }> = {};
+        for (const loc of data.locations ?? []) byAddress[(loc.address as string).toLowerCase()] = { lat: loc.lat, lng: loc.lng };
+        setBodegaLocationsByAddress(byAddress);
+      })
+      .catch(() => {});
+  }, []);
 
   function handleLocateMe() {
     if (!navigator.geolocation) {
@@ -512,10 +528,28 @@ export function BodegaOwnerPanel() {
         boolean,
       ];
       const myPledge = (myPledgesQuery.data?.[i]?.status === "success" ? (myPledgesQuery.data[i].result as bigint) : BigInt(0)) ?? BigInt(0);
-      return { id: i, organizer, title, goal, pledged, pledgeDeadline, withdrawWindowSeconds, withdrawn, myPledge };
+      const organizerLocation = bodegaLocationsByAddress[organizer.toLowerCase()];
+      const distanceFromMeKm =
+        myLat !== null && myLng !== null && organizerLocation
+          ? distanceKm(myLat, myLng, organizerLocation.lat, organizerLocation.lng)
+          : null;
+      return { id: i, organizer, title, goal, pledged, pledgeDeadline, withdrawWindowSeconds, withdrawn, myPledge, distanceFromMeKm };
     })
     .filter((o): o is NonNullable<typeof o> => o !== null)
     .reverse();
+
+  // Pedidos de bodegas lejanas no tienen sentido: alguien tiene que ir a recoger la mercadería
+  // a un solo punto de entrega. Si no sé dónde estoy, no puedo filtrar por distancia — se
+  // muestra todo, con un aviso para que guarde su ubicación. Los pedidos cuya organizadora no
+  // guardó ubicación quedan aparte, nunca mezclados silenciosamente en la lista "cercana".
+  const nearbyGroupOrders =
+    myLat === null || myLng === null || groupOrderRadiusKm === "all"
+      ? allGroupOrders
+      : allGroupOrders.filter((o) => o.distanceFromMeKm !== null && o.distanceFromMeKm <= groupOrderRadiusKm);
+  const groupOrdersWithoutLocation =
+    myLat === null || myLng === null || groupOrderRadiusKm === "all"
+      ? []
+      : allGroupOrders.filter((o) => o.distanceFromMeKm === null);
 
   async function handleCreateGroupOrder() {
     if (!groupOrdersAddress || !smartAccountClient || !address || !groupOrderTitle.trim()) return;
@@ -1526,8 +1560,16 @@ export function BodegaOwnerPanel() {
             Si tu distribuidor pide un mínimo que solo no alcanzas, arma un pedido grupal.
             Otras bodegas aportan; si se llega a la meta, retiras el fondo para comprarle en la
             vida real y repartir según lo que aportó cada una. Si no se llega a la meta, cada
-            una recupera lo suyo.
+            una recupera lo suyo. Solo tiene sentido con bodegas realmente cerca — alguien tiene
+            que ir a recoger el pedido a un solo punto, así que se muestran primero los pedidos
+            de bodegas dentro de tu zona.
           </p>
+          {(myLat === null || myLng === null) && (
+            <p className="text-xs text-[#8f9189]">
+              Guarda tu ubicación (más abajo) para que otras bodegas cercanas encuentren tu
+              pedido más fácil.
+            </p>
+          )}
 
           <div className="flex flex-col gap-2">
             <input
@@ -1585,9 +1627,33 @@ export function BodegaOwnerPanel() {
           </div>
 
           {allGroupOrders.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium text-[#0a0a0b]">Pedidos grupales de la red</p>
-              {allGroupOrders.map((o) => {
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium text-[#0a0a0b]">Pedidos grupales cerca de ti</p>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[#6b6d64]">Radio</span>
+                  <select
+                    value={groupOrderRadiusKm}
+                    onChange={(e) => setGroupOrderRadiusKm(e.target.value === "all" ? "all" : Number(e.target.value))}
+                    className="rounded-xl border border-black/15 bg-white px-2 py-1 text-xs text-[#0a0a0b] outline-none focus:border-black/35"
+                  >
+                    <option value={1}>1 km</option>
+                    <option value={2}>2 km</option>
+                    <option value={5}>5 km</option>
+                    <option value="all">Todos</option>
+                  </select>
+                </div>
+              </div>
+              {(myLat === null || myLng === null) && (
+                <p className="text-xs text-[#8f9189]">
+                  Guarda tu ubicación (más abajo, en &quot;Tu ubicación en el mapa&quot;) para ver solo los pedidos de
+                  bodegas cercanas — mientras tanto se muestran todos.
+                </p>
+              )}
+              {nearbyGroupOrders.length === 0 && (
+                <p className="text-xs text-[#8f9189]">No hay pedidos grupales dentro de ese radio todavía.</p>
+              )}
+              {nearbyGroupOrders.map((o) => {
                 const isMine = address && o.organizer.toLowerCase() === (address as string).toLowerCase();
                 return (
                   <div key={o.id} className={highlightBoxClass}>
@@ -1597,6 +1663,7 @@ export function BodegaOwnerPanel() {
                       {formatPaymentDate(Number(o.pledgeDeadline))}
                       {isMine ? " · tu pedido" : ""}
                       {o.withdrawn ? " · retirado" : ""}
+                      {o.distanceFromMeKm !== null ? ` · a ${o.distanceFromMeKm.toFixed(1)} km` : ""}
                     </p>
                     {o.myPledge > BigInt(0) && (
                       <p className="text-xs text-[#6b6d64]">Aportaste: {formatSoles(Number(o.myPledge) / 1e18)}</p>
@@ -1647,6 +1714,26 @@ export function BodegaOwnerPanel() {
                   </div>
                 );
               })}
+              {groupOrdersWithoutLocation.length > 0 && (
+                <details className="text-xs text-[#8f9189]">
+                  <summary className="cursor-pointer">
+                    {groupOrdersWithoutLocation.length} pedido{groupOrdersWithoutLocation.length === 1 ? "" : "s"} más de
+                    bodegas sin ubicación registrada (no sabemos si están cerca)
+                  </summary>
+                  <div className="mt-2 flex flex-col gap-2">
+                    {groupOrdersWithoutLocation.map((o) => (
+                      <div key={o.id} className={highlightBoxClass}>
+                        <p className="text-sm font-medium text-[#0a0a0b]">{o.title}</p>
+                        <p className="text-xs text-[#6b6d64]">
+                          {formatSoles(Number(o.pledged) / 1e18)} de {formatSoles(Number(o.goal) / 1e18)} · cierra{" "}
+                          {formatPaymentDate(Number(o.pledgeDeadline))}
+                          {o.withdrawn ? " · retirado" : ""}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
               {groupOrderActionError && <p className="text-xs text-red-500">{groupOrderActionError}</p>}
             </div>
           )}

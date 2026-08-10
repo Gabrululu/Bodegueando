@@ -18,8 +18,10 @@ interface IBodegaRegistry {
 ///
 /// No modela unidades ni catálogo de productos (mismo motivo que BeneficioToken.sol no
 /// modela categorías de gasto: sería simular una funcionalidad que no existe en el resto de
-/// la app). Tampoco filtra por cercanía geográfica: no hay geolocalización en ningún lugar
-/// del proyecto, así que el descubrimiento de pedidos grupales es una lista global.
+/// la app). Tampoco filtra por cercanía geográfica on-chain a propósito: la ubicación de una
+/// bodega no necesita ser trustless (mismo criterio que el mapa de bodegas), así que ese
+/// filtro vive en el frontend (BodegaOwnerPanel.tsx), no acá — ver ARCHITECTURE.md, sección
+/// GroupOrders, para el detalle de cómo se usa la ubicación fuera de la cadena.
 ///
 /// Confianza: solo la organizadora puede retirar, y solo una vez alcanzada la meta — mismo
 /// nivel de confianza que ya usan InvoiceEscrow.sol/RewardsCatalog.sol. Si la organizadora

@@ -239,7 +239,9 @@ con transacciones reales en Arbitrum Sepolia:
   sin garantía que ya existía.
 - **Compras conjuntas entre bodegas (`GroupOrders`) — ya construido.** Varias bodegas juntan
   su demanda hasta alcanzar el pedido mínimo de un distribuidor, en vez de negociar cada una
-  por separado o quedarse sin ese producto.
+  por separado o quedarse sin ese producto — filtrado por cercanía real (radio configurable
+  sobre el mismo mapa), porque juntar pedido con una bodega de otro distrito no tiene sentido
+  si alguien tiene que ir a recoger la mercadería a un solo punto.
 - **Catálogo de beneficios canjeables (`RewardsCatalog`) — ya construido.** Cada bodega arma
   su propio catálogo (canje directo o sorteo), pagado en los mismos puntos de cashback,
   canjeable en cualquier bodega de la red.
