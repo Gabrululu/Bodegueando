@@ -58,6 +58,21 @@ contract MockFiadoScoring is IFiadoScoring {
         totalOutstanding[msg.sender] += amount;
     }
 
+    address public escrowAddress;
+
+    function extendFiadoFor(address bodega, address customer, uint256 amount) external override {
+        fiadoDebt[bodega][customer] += amount;
+        totalOutstanding[bodega] += amount;
+    }
+
+    function escrow() external view override returns (address) {
+        return escrowAddress;
+    }
+
+    function setEscrow(address _escrow) external {
+        escrowAddress = _escrow;
+    }
+
     function repayFiado(address bodega, address customer, uint256 amount) external override {
         uint256 deducted = amount > fiadoDebt[bodega][customer] ? fiadoDebt[bodega][customer] : amount;
         fiadoDebt[bodega][customer] -= deducted;

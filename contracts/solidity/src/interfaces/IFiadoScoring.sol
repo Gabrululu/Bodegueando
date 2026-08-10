@@ -46,10 +46,22 @@ interface IFiadoScoring {
     /// would push total outstanding past the caller's own credit limit.
     function extendFiado(address customer, uint256 amount) external;
 
+    /// @notice Same as `extendFiado`, but `bodega` is passed explicitly instead of taken from
+    /// `msg.sender`. Restricted on the Stylus side to the configured escrow address —
+    /// InvoiceEscrow calls this on a bodega's behalf the moment a customer accepts a
+    /// collateral-backed invoice, so that debt counts toward the same score/history as
+    /// ordinary fiado.
+    function extendFiadoFor(address bodega, address customer, uint256 amount) external;
+
     /// @notice Records a fiado repayment from `customer` to `bodega`. Restricted on the Stylus
-    /// side to the configured payment_router address — called from `PaymentRouter.payFiado`
-    /// after the real ETH transfer to `bodega` already happened.
+    /// side to the configured payment_router or escrow address — called from
+    /// `PaymentRouter.payFiado` after the real ETH transfer to `bodega` already happened, or
+    /// from InvoiceEscrow's `repayInvoice`/`claimCollateral` for the collateral-backed path.
     function repayFiado(address bodega, address customer, uint256 amount) external;
+
+    /// @notice The InvoiceEscrow contract address currently authorized to call
+    /// `extendFiadoFor` and `repayFiado`.
+    function escrow() external view returns (address);
 
     /// @notice Current outstanding fiado debt that `customer` owes `bodega`, in wei.
     function getFiadoDebt(address bodega, address customer) external view returns (uint256);

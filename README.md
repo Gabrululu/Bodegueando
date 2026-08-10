@@ -35,11 +35,12 @@ bodegueando/
 
 | Contrato | Dirección | Arbiscan |
 |---|---|---|
-| **FiadoScoring** (Stylus/Rust) | `0x9C6868b6c8521854e65C622a848A2C0C9873b6Df` | [ver / verificado](https://sepolia.arbiscan.io/address/0x9C6868b6c8521854e65C622a848A2C0C9873b6Df) |
+| **FiadoScoring** (Stylus/Rust) | `0x22FD7ED957b356dcF4a93574D24fC724736480B2` | [ver / verificado](https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
 | **PaymentRouter** | `0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd#code) |
 | **PuntosPaymaster** | `0x138572e9A1c858D2759e60f46586D36e974FBcEd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x138572e9A1c858D2759e60f46586D36e974FBcEd#code) |
 | **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
+| **InvoiceEscrow** (fiado con garantía parcial) | `0x8fe870ac497708E8a123e8083f3AF32cf5b6C645` | [ver código verificado](https://sepolia.arbiscan.io/address/0x8fe870ac497708E8a123e8083f3AF32cf5b6C645#code) |
 
 `FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
 fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `PuntosPaymaster`
@@ -76,6 +77,15 @@ transacción había tenido éxito o revertido — así que el primer intento fal
 igual el bootstrap y la dejaba sin PUNTOS para reintentar. Ver "Bug real encontrado en vivo"
 en la misma sección de abajo para el detalle. Reusa el mismo `PuntosToken` de siempre; el
 depósito de gas en el EntryPoint es nuevo (0.02 ETH), el del paymaster viejo queda huérfano.
+
+`FiadoScoring` se redesplegó una tercera vez el 2026-08-10 para agregar `escrow`/
+`extendFiadoFor` (ver "InvoiceEscrow" más abajo) — necesario porque es un contrato Stylus
+inmutable, así que sumarle un método nuevo no tiene otra forma. Esto resetea el
+score/historial/deuda de todas las cuentas (datos de demo, no reales). `PaymentRouter` se
+reconectó a la instancia nueva con `setFiadoScoring` (sin redesplegarse), y el `aiOracle` se
+volvió a autorizar con la misma cuenta de siempre. `InvoiceEscrow` se desplegó por primera vez
+apuntando a este `FiadoScoring` nuevo y al `PaymentRouter` existente (como `IBodegaRegistry`,
+mismo patrón que `BeneficioToken`), y quedó autorizado en `FiadoScoring.setEscrow`.
 
 `PuntosToken`, `PaymentRouter`, `PuntosPaymaster` y `BeneficioToken` están verificados con código fuente Solidity legible en
 Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
@@ -200,6 +210,73 @@ para esta corrida):
 El sobrepago y el control de acceso de `repayFiado` (solo `payment_router`) ya están cubiertos
 por los tests locales, así que esta corrida se enfocó en probar el camino feliz completo con
 ETH real moviéndose entre dos cuentas distintas en Arbitrum Sepolia.
+
+### InvoiceEscrow — fiado con garantía parcial
+
+`extendFiado` es fiado 100% no garantizado: la bodega fía sin que el cliente deposite nada,
+limitado solo por su `credit_limit`. `InvoiceEscrow.sol` es una vía **adicional** (no
+reemplaza `extendFiado`) para montos donde una bodega prefiere pedir un depósito parcial en
+vez de fiar solo en base a confianza:
+
+- **`proposeInvoice(cliente, principal, garantía, vencimiento)`** — la bodega (verificada
+  contra `PaymentRouter.isBodega`) propone una factura. No mueve fondos ni deuda todavía.
+- **`acceptInvoice(id)`** (`payable`, `msg.value` = garantía exacta) — el cliente acepta y
+  deposita la garantía, que el contrato retiene. Atómicamente llama a la nueva
+  `FiadoScoring.extendFiadoFor(bodega, cliente, principal)`, así que esta deuda cuenta para
+  el mismo score/historial que el fiado sin garantía.
+- **`repayInvoice(id)`** (`payable`, pagos parciales permitidos) — reenvía el ETH a la bodega
+  y llama a `repayFiado`, igual que `PaymentRouter.payFiado`. Al llegar al principal completo,
+  devuelve toda la garantía al cliente.
+- **`claimCollateral(id)`** — pasado el vencimiento con saldo pendiente, la bodega reclama
+  `min(faltante, garantía)`, se descuenta de la deuda on-chain, y el sobrante (si queda) vuelve
+  al cliente.
+
+Para que `extendFiadoFor` y el `repayFiado` que dispara `claimCollateral`/`repayInvoice`
+cuenten como llamadas confiables, `FiadoScoring` (Rust/Stylus) ganó una segunda dirección de
+confianza, `escrow` (seteable solo por su owner con `setEscrow`, mismo patrón que
+`payment_router`), y un nuevo método `extendFiadoFor(bodega, cliente, monto)` restringido a
+esa dirección — exactamente la misma lógica que `extendFiado`, solo que `bodega` es un
+parámetro en vez de `msg.sender`. Como es un contrato Stylus inmutable, agregar esto obligó a
+**redesplegarlo en una dirección nueva**, perdiendo el score/historial de la corrida de arriba
+(datos de demo, no reales).
+
+Cubierto con tests unitarios en ambos contratos: `cargo test` (Rust, 11/11, incluyendo que
+`extend_fiado_for`/`repay_fiado` solo aceptan al `escrow` configurado) y `forge test`
+(Solidity, 14/14 nuevos sobre `InvoiceEscrow` — propuesta/cancelación, garantía exacta,
+repago parcial vs. total, reclamo antes/después del vencimiento, reclamo acotado a la garantía
+disponible — más los 29 tests preexistentes sin romperse, 43/43 en total).
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia** (direcciones nuevas en la
+tabla de arriba). Corrida real de punta a punta contra los contratos nuevos (la cuenta
+deployer actuando como bodega — ya registrada en `PaymentRouter` de antes — y una wallet de
+cliente descartable recién creada para esta corrida, igual que en "Fiado con libro de deuda
+real"):
+
+1. La bodega construye historial (un pago de 0.002 ETH a sí misma vía `receivePayment`) para
+   tener `getCreditLimit` > 0 en el `FiadoScoring` recién desplegado (arranca en cero, como
+   toda cuenta en un contrato nuevo), y activa `setFiadoEnabled(true)`.
+2. Propone una factura por el 25% de su límite (`0.0006375 ETH`) con 30% de garantía
+   (`0.00019125 ETH`) y vencimiento a 75 segundos
+   ([tx `0x3a678c...`](https://sepolia.arbiscan.io/tx/0x3a678c96308323c8571bf977a1278b3a8de3139d302ecd7662c7bff69be1bd15)).
+3. El cliente acepta y deposita la garantía
+   ([tx `0xf3a87b...`](https://sepolia.arbiscan.io/tx/0xf3a87b966e10024e521b6a68143c0028be2d551c1222f5e1df31c8fd7f432639)):
+   `getFiadoDebt(bodega, cliente)` pasa de `0` a `637500000000000` wei — el mismo ledger que
+   usa el fiado sin garantía, actualizado por `extendFiadoFor`.
+4. El cliente repaga un tercio del principal
+   ([tx `0x2d632c...`](https://sepolia.arbiscan.io/tx/0x2d632cb0fdb80fce3a97ab0dfea667577431e52102d7a1ff82cc2d6993496c87)):
+   la deuda baja a `425000000000000` wei, la factura sigue `Active` y la garantía completa
+   sigue retenida (no se libera con pagos parciales, solo al llegar al principal completo).
+5. Pasado el vencimiento sin el resto del pago, la bodega reclama
+   ([tx `0xd2c985...`](https://sepolia.arbiscan.io/tx/0xd2c9853707b9fce8493053d0f98bb3e6477db1adf154a6a9b822e12603dc444c)):
+   el faltante (`425000000000000` wei) supera la garantía disponible
+   (`191250000000000` wei), así que el reclamo se acota a la garantía completa — exactamente
+   el comportamiento que cubre `test_ClaimCapsAtCollateralWhenShortfallExceedsIt`. La deuda
+   baja a `233750000000000` wei, la factura queda `Defaulted` y su `collateral` en `0`.
+
+El camino feliz completo (repago total libera toda la garantía) y el reclamo con sobrante
+para devolver al cliente ya están cubiertos por los tests locales, así que esta corrida se
+enfocó en encadenar propose → accept → repago parcial → reclamo acotado con ETH real
+moviéndose en Arbitrum Sepolia.
 
 ### Circuit breaker on-chain para el oráculo de IA (probado en vivo)
 
@@ -650,7 +727,8 @@ marca qué parte de esto ya está construido y probado en testnet.
    - `CreditLineManager.sol` — líneas de fiado, límites y vencimientos (implementado
      como `FiadoScoring` en Stylus, con scoring on-chain **y** ajuste por IA — ya en
      producción en testnet, no es "próxima fase").
-   - `InvoiceEscrow.sol` (opcional) — fiado con garantía parcial.
+   - `InvoiceEscrow.sol` — fiado con garantía parcial, opción adicional junto al fiado sin
+     garantía de siempre (desplegado, verificado y probado en vivo — ver "InvoiceEscrow").
 4. **Backend y servicios** — API que orquesta creación de smart account, llamadas a
    contratos, scoring y notificaciones; base de datos para perfil/catálogo/métricas y
    cache de saldos para que la UX se sienta instantánea; motor de riesgo off-chain
@@ -701,7 +779,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS. Incluye dos fixes encontrados en vivo: PUNTOS de bienvenida para bodegas, y que un primer intento fallido ya no quema la transacción gratis, ver "Login sin wallet..." |
 | Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
 | Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
-| `InvoiceEscrow` (fiado con garantía) | 🔜 Roadmap, opcional |
+| `InvoiceEscrow` (fiado con garantía parcial) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (11/11 Rust, 43/43 Solidity) — ver "InvoiceEscrow" |
 | Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
 | `ePEN` (token propio, redimible 1:1 por soles reales) | 🔜 Roadmap — hoy la app solo convierte el monto a soles para mostrarlo (ver "Atajos"); un `ePEN` real necesitaría un emisor regulado que respalde cada token con soles en custodia (como una stablecoin bancaria), que es un problema de compliance y de rampas fiat, no solo de contrato. Construir el contrato ERC-20 en sí es trivial; lo que falta es esa pieza, y no vale la pena simularla con una paridad falsa que parezca más sólida de lo que es |
 | Score crediticio del bodeguero con Zero-Knowledge (no del cliente — del propio negocio) | 🔜 Roadmap — hoy el historial on-chain demuestra si los *clientes* de una bodega pagan bien; falta la pieza inversa, que el bodeguero use ese mismo historial de ventas para probarle su propia solidez a un banco/proveedor sin entregarle el detalle de sus ventas. Necesita una prueba ZK sobre los datos ya on-chain (ej. "mis ventas superan X" sin revelar la cifra exacta) — es la pieza que falta para que el historial sea útil también *hacia afuera*, no solo hacia sus propios clientes |
@@ -798,6 +876,18 @@ PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> \
   forge script script/DeployBeneficioToken.s.sol:DeployBeneficioToken \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 # opcional: cast send <BeneficioTokenAddress> "transferOwnership(address)" <smart account admin>
+```
+
+Deploy de `InvoiceEscrow` (requiere `PaymentRouter` y `FiadoScoring` ya desplegados; este
+último necesita soportar `setEscrow`/`extendFiadoFor`, agregados junto con este contrato —
+ver "InvoiceEscrow" más arriba):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> FIADO_SCORING_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployInvoiceEscrow.s.sol:DeployInvoiceEscrow \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# después: cast send <FiadoScoringAddress> "setEscrow(address)" <InvoiceEscrowAddress> ...
 ```
 
 ### Contrato Stylus (FiadoScoring)

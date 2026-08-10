@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { parseEther, type Address } from "viem";
-import { useReadContract } from "wagmi";
+import { useReadContract, useReadContracts } from "wagmi";
 import {
   fiadoScoringAbi,
   fiadoScoringAddress,
@@ -10,6 +10,8 @@ import {
   paymentRouterAddress,
   beneficioTokenAbi,
   beneficioTokenAddress,
+  invoiceEscrowAbi,
+  invoiceEscrowAddress,
 } from "@/lib/contracts";
 import { confianzaLabel } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -221,6 +223,82 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       setRedeemError("No se pudo pagar con tu beneficio. Revisa el monto e intenta de nuevo.");
     } finally {
       setIsRedeemSubmitting(false);
+    }
+  }
+
+  const invoiceCountQuery = useReadContract({
+    address: invoiceEscrowAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "nextInvoiceId",
+    query: { enabled: Boolean(invoiceEscrowAddress) },
+  });
+  const invoiceCount = Number((invoiceCountQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const invoicesQuery = useReadContracts({
+    contracts: Array.from({ length: invoiceCount }, (_, i) => ({
+      address: invoiceEscrowAddress,
+      abi: invoiceEscrowAbi,
+      functionName: "invoices",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(invoiceEscrowAddress) && invoiceCount > 0 },
+  });
+
+  const myInvoices = (invoicesQuery.data ?? [])
+    .map((result, i) => {
+      if (result.status !== "success") return null;
+      const [invBodega, invCustomer, principal, collateral, repaidAmount, dueDate, status] = result.result as [
+        Address,
+        Address,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        number,
+      ];
+      return { id: i, bodega: invBodega, customer: invCustomer, principal, collateral, repaidAmount, dueDate, status };
+    })
+    .filter((inv): inv is NonNullable<typeof inv> => inv !== null)
+    .filter((inv) => address && inv.customer.toLowerCase() === (address as string).toLowerCase())
+    .filter((inv) => inv.status === 0 || inv.status === 1) // Proposed or Active — the only actionable ones
+    .reverse();
+
+  const [invoiceRepaySoles, setInvoiceRepaySoles] = useState<Record<number, string>>({});
+  const [acceptingInvoiceId, setAcceptingInvoiceId] = useState<number | null>(null);
+  const [repayingInvoiceId, setRepayingInvoiceId] = useState<number | null>(null);
+  const [invoiceActionError, setInvoiceActionError] = useState<string | null>(null);
+
+  async function handleAcceptInvoice(id: number, collateral: bigint) {
+    if (!invoiceEscrowAddress || !smartAccountClient || !address) return;
+    setAcceptingInvoiceId(id);
+    setInvoiceActionError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: invoiceEscrowAddress, abi: invoiceEscrowAbi, functionName: "acceptInvoice", args: [BigInt(id)], value: collateral },
+      ]);
+      invoicesQuery.refetch();
+    } catch {
+      setInvoiceActionError("No se pudo aceptar la factura. Revisa que tengas saldo para la garantía.");
+    } finally {
+      setAcceptingInvoiceId(null);
+    }
+  }
+
+  async function handleRepayInvoice(id: number) {
+    if (!invoiceEscrowAddress || !smartAccountClient || !address) return;
+    setRepayingInvoiceId(id);
+    setInvoiceActionError(null);
+    try {
+      const amountWei = parseEther(solesToEth(Number(invoiceRepaySoles[id] || "0")).toFixed(18));
+      await sendAndWait(smartAccountClient, address, [
+        { address: invoiceEscrowAddress, abi: invoiceEscrowAbi, functionName: "repayInvoice", args: [BigInt(id)], value: amountWei },
+      ]);
+      setInvoiceRepaySoles((prev) => ({ ...prev, [id]: "" }));
+      invoicesQuery.refetch();
+    } catch {
+      setInvoiceActionError("No se pudo pagar esta factura. Intenta de nuevo.");
+    } finally {
+      setRepayingInvoiceId(null);
     }
   }
 
@@ -505,6 +583,64 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
             <p className="text-xs text-[#8f9189]">Escribe el código de la bodega arriba para pagar con esto.</p>
           )}
         </div>
+      )}
+
+      {isConnected && myInvoices.length > 0 && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Facturas con garantía</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Fiado con depósito parcial que te propuso una bodega. Si aceptas, el depósito queda
+            retenido hasta que termines de pagar; si no pagas antes del vencimiento, la bodega
+            puede reclamarlo.
+          </p>
+          {myInvoices.map((inv) => (
+            <div key={inv.id} className={highlightBoxClass}>
+              <p className="text-xs text-[#6b6d64]">
+                Monto: <span className="font-medium text-[#0a0a0b]">{formatSoles(Number(inv.principal) / 1e18)}</span> · Garantía:{" "}
+                {formatSoles(Number(inv.collateral) / 1e18)}
+              </p>
+              <p className="text-xs text-[#6b6d64]">Vence el {new Date(Number(inv.dueDate) * 1000).toLocaleDateString("es-PE")}</p>
+
+              {inv.status === 0 && (
+                <button
+                  onClick={() => handleAcceptInvoice(inv.id, inv.collateral)}
+                  disabled={acceptingInvoiceId === inv.id}
+                  className={outlineButtonClass}
+                >
+                  {acceptingInvoiceId === inv.id ? "Aceptando..." : `Aceptar y depositar ${formatSoles(Number(inv.collateral) / 1e18)}`}
+                </button>
+              )}
+
+              {inv.status === 1 && (
+                <div className="mt-1 flex flex-col gap-2 border-t border-black/10 pt-3">
+                  <p className="text-xs text-[#6b6d64]">
+                    Ya pagaste: {formatSoles(Number(inv.repaidAmount) / 1e18)} de {formatSoles(Number(inv.principal) / 1e18)}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-[#6b6d64]">S/</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.5"
+                      value={invoiceRepaySoles[inv.id] ?? ""}
+                      onChange={(e) => setInvoiceRepaySoles((prev) => ({ ...prev, [inv.id]: e.target.value }))}
+                      className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                    />
+                  </div>
+                  <button
+                    onClick={() => handleRepayInvoice(inv.id)}
+                    disabled={repayingInvoiceId === inv.id}
+                    className={outlineButtonClass}
+                  >
+                    {repayingInvoiceId === inv.id ? "Pagando..." : "Pagar esta factura"}
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+          {invoiceActionError && <p className="text-xs text-red-500">{invoiceActionError}</p>}
+        </section>
       )}
 
       {bodegaAddress && isRealBodega && (

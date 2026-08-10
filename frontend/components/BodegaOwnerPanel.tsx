@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { parseEther, type Address } from "viem";
-import { useReadContract } from "wagmi";
+import { useReadContract, useReadContracts } from "wagmi";
 import { QRCodeSVG } from "qrcode.react";
 import {
   fiadoScoringAbi,
@@ -10,6 +10,8 @@ import {
   paymentRouterAddress,
   beneficioTokenAbi,
   beneficioTokenAddress,
+  invoiceEscrowAbi,
+  invoiceEscrowAddress,
 } from "@/lib/contracts";
 import { RISK_COLOR, RISK_LABEL, confianzaLabel, type AiRecommendation } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -69,6 +71,14 @@ export function BodegaOwnerPanel() {
   const [isFiarSubmitting, setIsFiarSubmitting] = useState(false);
   const [fiarError, setFiarError] = useState<string | null>(null);
   const [fiarConfirmed, setFiarConfirmed] = useState(false);
+  const [escrowPrincipalSoles, setEscrowPrincipalSoles] = useState("50");
+  const [escrowCollateralSoles, setEscrowCollateralSoles] = useState("15");
+  const [escrowDueDays, setEscrowDueDays] = useState("15");
+  const [isProposing, setIsProposing] = useState(false);
+  const [proposeError, setProposeError] = useState<string | null>(null);
+  const [proposeConfirmed, setProposeConfirmed] = useState(false);
+  const [claimingInvoiceId, setClaimingInvoiceId] = useState<number | null>(null);
+  const [claimError, setClaimError] = useState<string | null>(null);
   const [beneficiaryCodeInput, setBeneficiaryCodeInput] = useState("");
   const [beneficiaryAddress, setBeneficiaryAddress] = useState<Address | undefined>(undefined);
   const [isResolvingBeneficiary, setIsResolvingBeneficiary] = useState(false);
@@ -151,6 +161,87 @@ export function BodegaOwnerPanel() {
     args: address ? [address] : undefined,
     query: { enabled: Boolean(address && fiadoScoringAddress) },
   });
+
+  const invoiceCountQuery = useReadContract({
+    address: invoiceEscrowAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "nextInvoiceId",
+    query: { enabled: Boolean(invoiceEscrowAddress) },
+  });
+  const invoiceCount = Number((invoiceCountQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const invoicesQuery = useReadContracts({
+    contracts: Array.from({ length: invoiceCount }, (_, i) => ({
+      address: invoiceEscrowAddress,
+      abi: invoiceEscrowAbi,
+      functionName: "invoices",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(invoiceEscrowAddress) && invoiceCount > 0 },
+  });
+
+  const INVOICE_STATUS_LABEL = ["Propuesta", "Activa", "Pagada", "Vencida — reclamada", "Cancelada"];
+  const myInvoices = (invoicesQuery.data ?? [])
+    .map((result, i) => {
+      if (result.status !== "success") return null;
+      const [invBodega, invCustomer, principal, collateral, repaidAmount, dueDate, status] = result.result as [
+        Address,
+        Address,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        number,
+      ];
+      return { id: i, bodega: invBodega, customer: invCustomer, principal, collateral, repaidAmount, dueDate, status };
+    })
+    .filter((inv): inv is NonNullable<typeof inv> => inv !== null)
+    .filter((inv) => address && inv.bodega.toLowerCase() === (address as string).toLowerCase())
+    .reverse();
+
+  async function handleProposeInvoice() {
+    if (!customerAddress || !invoiceEscrowAddress || !smartAccountClient || !address) return;
+    setIsProposing(true);
+    setProposeError(null);
+    setProposeConfirmed(false);
+    try {
+      const principalWei = parseEther(solesToEth(Number(escrowPrincipalSoles || "0")).toFixed(18));
+      const collateralWei = parseEther(solesToEth(Number(escrowCollateralSoles || "0")).toFixed(18));
+      const dueDate = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, Math.round(Number(escrowDueDays || "0"))) * 86400);
+      await sendAndWait(smartAccountClient, address, [
+        {
+          address: invoiceEscrowAddress,
+          abi: invoiceEscrowAbi,
+          functionName: "proposeInvoice",
+          args: [customerAddress, principalWei, collateralWei, dueDate],
+        },
+      ]);
+      setProposeConfirmed(true);
+      invoiceCountQuery.refetch();
+      invoicesQuery.refetch();
+    } catch {
+      setProposeError("No se pudo proponer el fiado con garantía. Intenta de nuevo.");
+    } finally {
+      setIsProposing(false);
+    }
+  }
+
+  async function handleClaimCollateral(id: number) {
+    if (!invoiceEscrowAddress || !smartAccountClient || !address) return;
+    setClaimingInvoiceId(id);
+    setClaimError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: invoiceEscrowAddress, abi: invoiceEscrowAbi, functionName: "claimCollateral", args: [BigInt(id)] },
+      ]);
+      invoicesQuery.refetch();
+      refetchAll();
+    } catch {
+      setClaimError("No se pudo reclamar la garantía. Revisa que ya haya vencido el plazo.");
+    } finally {
+      setClaimingInvoiceId(null);
+    }
+  }
 
   const beneficioOwnerQuery = useReadContract({
     address: beneficioTokenAddress,
@@ -669,6 +760,94 @@ export function BodegaOwnerPanel() {
           </div>
         )}
       </section>
+
+      {invoiceEscrowAddress && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Fiado con garantía</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Para montos más grandes, pídele a tu cliente un depósito parcial en vez de fiar sin
+            garantía. Si no te paga antes del vencimiento, reclamas ese depósito.
+          </p>
+
+          {customerAddress && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-[#6b6d64]">Monto S/</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="1"
+                  value={escrowPrincipalSoles}
+                  onChange={(e) => setEscrowPrincipalSoles(e.target.value)}
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-[#6b6d64]">Garantía S/</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="1"
+                  value={escrowCollateralSoles}
+                  onChange={(e) => setEscrowCollateralSoles(e.target.value)}
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-[#6b6d64]">Vence en (días)</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  step="1"
+                  value={escrowDueDays}
+                  onChange={(e) => setEscrowDueDays(e.target.value)}
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                />
+              </div>
+              <button onClick={handleProposeInvoice} disabled={isProposing} className={primaryButtonClass} style={primaryButtonStyle}>
+                {isProposing ? "Proponiendo..." : "Proponer a este cliente"}
+              </button>
+              {proposeError && <p className="text-xs text-red-500">{proposeError}</p>}
+              {proposeConfirmed && (
+                <p className="text-xs text-green-600">¡Listo! El cliente ya puede aceptarla y depositar la garantía ✓</p>
+              )}
+            </div>
+          )}
+          {!customerAddress && (
+            <p className="text-xs text-[#6b6d64]">Busca un cliente arriba (en &quot;Fiar a un cliente&quot;) para proponerle una factura con garantía.</p>
+          )}
+
+          {myInvoices.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-[#0a0a0b]">Tus facturas con garantía</p>
+              {myInvoices.map((inv) => (
+                <div key={inv.id} className={highlightBoxClass}>
+                  <p className="text-xs text-[#6b6d64]">
+                    {formatSoles(Number(inv.principal) / 1e18)} · garantía {formatSoles(Number(inv.collateral) / 1e18)} · vence{" "}
+                    {formatPaymentDate(Number(inv.dueDate))}
+                  </p>
+                  <p className="text-xs text-[#6b6d64]">
+                    Pagado: {formatSoles(Number(inv.repaidAmount) / 1e18)} · Estado: {INVOICE_STATUS_LABEL[inv.status]}
+                  </p>
+                  {inv.status === 1 && (
+                    <button
+                      onClick={() => handleClaimCollateral(inv.id)}
+                      disabled={claimingInvoiceId === inv.id}
+                      className={`${outlineButtonClass} mt-2`}
+                    >
+                      {claimingInvoiceId === inv.id ? "Reclamando..." : "Reclamar garantía (si ya venció sin pagar)"}
+                    </button>
+                  )}
+                </div>
+              ))}
+              {claimError && <p className="text-xs text-red-500">{claimError}</p>}
+            </div>
+          )}
+        </section>
+      )}
 
       {isBeneficioAdmin && (
         <section className={cardClass}>

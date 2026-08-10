@@ -95,6 +95,7 @@ sol_storage! {
         address owner;
         address payment_router;
         address ai_oracle;
+        address escrow;
 
         mapping(address => uint256[12]) recent_amounts;
         mapping(address => uint256[12]) recent_timestamps;
@@ -133,6 +134,10 @@ impl FiadoScoring {
         self.ai_oracle.get()
     }
 
+    pub fn escrow(&self) -> Address {
+        self.escrow.get()
+    }
+
     pub fn set_payment_router(&mut self, router: Address) -> Result<(), FiadoError> {
         self.only_owner()?;
         if router.is_zero() {
@@ -148,6 +153,19 @@ impl FiadoScoring {
             return Err(FiadoError::ZeroAddress(ZeroAddress {}));
         }
         self.ai_oracle.set(oracle);
+        Ok(())
+    }
+
+    /// Sets the InvoiceEscrow contract address — the only caller allowed to call
+    /// `extend_fiado_for` (fiado extended on behalf of a bodega, for the collateral-backed
+    /// path) and, alongside `payment_router`, to call `repay_fiado` (a collateral claim on
+    /// default is also a debt repayment, from the ledger's point of view).
+    pub fn set_escrow(&mut self, escrow: Address) -> Result<(), FiadoError> {
+        self.only_owner()?;
+        if escrow.is_zero() {
+            return Err(FiadoError::ZeroAddress(ZeroAddress {}));
+        }
+        self.escrow.set(escrow);
         Ok(())
     }
 
@@ -222,35 +240,32 @@ impl FiadoScoring {
     /// than its track record supports.
     pub fn extend_fiado(&mut self, customer: Address, amount: U256) -> Result<(), FiadoError> {
         let bodega = self.vm().msg_sender();
-
-        if amount.is_zero() {
-            return Err(FiadoError::ZeroAmount(ZeroAmount {}));
-        }
-        if !self.fiado_enabled.get(bodega) {
-            return Err(FiadoError::FiadoNotEnabled(FiadoNotEnabled {}));
-        }
-
-        let outstanding = self.total_outstanding.get(bodega);
-        let limit = self.credit_limit.get(bodega);
-        if outstanding.saturating_add(amount) > limit {
-            return Err(FiadoError::InsufficientLimit(InsufficientLimit {}));
-        }
-
-        let current_debt = self.fiado_debt.getter(bodega).get(customer);
-        self.fiado_debt.setter(bodega).setter(customer).set(current_debt.saturating_add(amount));
-        self.total_outstanding.setter(bodega).set(outstanding.saturating_add(amount));
-
-        self.vm().log(FiadoExtended { bodega, customer, amount });
-        Ok(())
+        self.extend_fiado_internal(bodega, customer, amount)
     }
 
-    /// Records a fiado repayment from `customer` to `bodega`. Restricted to `payment_router` —
-    /// same trust boundary as `record_payment` — because the actual ETH transfer already
-    /// happened in `PaymentRouter.payFiado` before this call; this just updates the debt
-    /// ledger. Caps the deduction at the outstanding debt so an over-payment can't underflow
-    /// the balance.
+    /// Same as `extend_fiado`, but `bodega` is passed explicitly instead of taken from
+    /// `msg.sender` — restricted to the `escrow` contract, which calls this on a bodega's
+    /// behalf the moment a customer accepts a collateral-backed invoice (InvoiceEscrow's
+    /// `acceptInvoice`). Everything else (fiado-enabled check, credit-limit cap) is identical
+    /// to `extend_fiado`, so the collateral-backed debt counts toward the same score/history
+    /// as ordinary fiado.
+    pub fn extend_fiado_for(&mut self, bodega: Address, customer: Address, amount: U256) -> Result<(), FiadoError> {
+        if self.vm().msg_sender() != self.escrow.get() {
+            return Err(FiadoError::Unauthorized(Unauthorized {}));
+        }
+        self.extend_fiado_internal(bodega, customer, amount)
+    }
+
+    /// Records a fiado repayment from `customer` to `bodega`. Restricted to `payment_router`
+    /// or `escrow` — same trust boundary as `record_payment`, widened to `escrow` because a
+    /// collateral claim on a defaulted invoice (InvoiceEscrow's `claimCollateral`) is also a
+    /// debt repayment from the ledger's point of view, and a partial repayment through
+    /// InvoiceEscrow's own `repayInvoice` needs the same access. In both cases the actual ETH
+    /// already moved before this call; this just updates the debt ledger. Caps the deduction
+    /// at the outstanding debt so an over-payment can't underflow the balance.
     pub fn repay_fiado(&mut self, bodega: Address, customer: Address, amount: U256) -> Result<(), FiadoError> {
-        if self.vm().msg_sender() != self.payment_router.get() {
+        let sender = self.vm().msg_sender();
+        if sender != self.payment_router.get() && sender != self.escrow.get() {
             return Err(FiadoError::Unauthorized(Unauthorized {}));
         }
 
@@ -330,6 +345,32 @@ impl FiadoScoring {
         if self.vm().msg_sender() != self.owner.get() {
             return Err(FiadoError::Unauthorized(Unauthorized {}));
         }
+        Ok(())
+    }
+
+    /// Shared debt-ledger update behind both `extend_fiado` and `extend_fiado_for` — the only
+    /// difference between the two public entry points is how `bodega` is determined
+    /// (`msg.sender` vs. an escrow-supplied parameter); the fiado-enabled check, credit-limit
+    /// cap, ledger update and event are identical either way.
+    fn extend_fiado_internal(&mut self, bodega: Address, customer: Address, amount: U256) -> Result<(), FiadoError> {
+        if amount.is_zero() {
+            return Err(FiadoError::ZeroAmount(ZeroAmount {}));
+        }
+        if !self.fiado_enabled.get(bodega) {
+            return Err(FiadoError::FiadoNotEnabled(FiadoNotEnabled {}));
+        }
+
+        let outstanding = self.total_outstanding.get(bodega);
+        let limit = self.credit_limit.get(bodega);
+        if outstanding.saturating_add(amount) > limit {
+            return Err(FiadoError::InsufficientLimit(InsufficientLimit {}));
+        }
+
+        let current_debt = self.fiado_debt.getter(bodega).get(customer);
+        self.fiado_debt.setter(bodega).setter(customer).set(current_debt.saturating_add(amount));
+        self.total_outstanding.setter(bodega).set(outstanding.saturating_add(amount));
+
+        self.vm().log(FiadoExtended { bodega, customer, amount });
         Ok(())
     }
 
@@ -643,5 +684,109 @@ mod test {
         assert_eq!(contract.get_fiado_debt(bodega, customer), U256::ZERO);
         assert_eq!(contract.get_total_outstanding(bodega), U256::ZERO);
         assert_eq!(contract.get_available_fiado(bodega), contract.get_credit_limit(bodega));
+    }
+
+    #[test]
+    fn test_set_escrow_is_owner_gated_and_rejects_zero() {
+        let vm = TestVM::default();
+        let mut contract = FiadoScoring::from(&vm);
+
+        let owner = Address::from([1u8; 20]);
+        let escrow = Address::from([6u8; 20]);
+        let other = Address::from([9u8; 20]);
+
+        contract.constructor(owner).unwrap();
+
+        // Not the owner.
+        vm.set_sender(other);
+        assert!(contract.set_escrow(escrow).is_err());
+
+        vm.set_sender(owner);
+        assert!(contract.set_escrow(Address::ZERO).is_err());
+        contract.set_escrow(escrow).unwrap();
+        assert_eq!(contract.escrow(), escrow);
+    }
+
+    #[test]
+    fn test_extend_fiado_for_is_escrow_gated_and_shares_extend_fiado_rules() {
+        let vm = TestVM::default();
+        let mut contract = FiadoScoring::from(&vm);
+
+        let owner = Address::from([1u8; 20]);
+        let router = Address::from([2u8; 20]);
+        let escrow = Address::from([6u8; 20]);
+        let bodega = Address::from([3u8; 20]);
+        let customer = Address::from([5u8; 20]);
+
+        contract.constructor(owner).unwrap();
+        vm.set_sender(owner);
+        contract.set_payment_router(router).unwrap();
+        contract.set_escrow(escrow).unwrap();
+
+        vm.set_sender(router);
+        vm.set_block_timestamp(1_000_000);
+        contract.record_payment(bodega, U256::from(1_000_000_000_000_000_000u128), U256::ZERO).unwrap();
+        let limit = contract.get_credit_limit(bodega);
+
+        // Only the escrow contract can call this, not the bodega itself nor the router.
+        vm.set_sender(bodega);
+        assert!(contract.extend_fiado_for(bodega, customer, U256::from(1)).is_err());
+        vm.set_sender(router);
+        assert!(contract.extend_fiado_for(bodega, customer, U256::from(1)).is_err());
+
+        // Same fiado_enabled/limit rules as extend_fiado apply once called by escrow.
+        vm.set_sender(escrow);
+        assert!(contract.extend_fiado_for(bodega, customer, U256::from(1)).is_err());
+
+        vm.set_sender(bodega);
+        contract.set_fiado_enabled(true);
+
+        vm.set_sender(escrow);
+        assert!(contract.extend_fiado_for(bodega, customer, limit + U256::from(1)).is_err());
+
+        let half = limit / U256::from(2u64);
+        contract.extend_fiado_for(bodega, customer, half).unwrap();
+        assert_eq!(contract.get_fiado_debt(bodega, customer), half);
+        assert_eq!(contract.get_total_outstanding(bodega), half);
+    }
+
+    #[test]
+    fn test_repay_fiado_accepts_escrow_or_router_rejects_others() {
+        let vm = TestVM::default();
+        let mut contract = FiadoScoring::from(&vm);
+
+        let owner = Address::from([1u8; 20]);
+        let router = Address::from([2u8; 20]);
+        let escrow = Address::from([6u8; 20]);
+        let bodega = Address::from([3u8; 20]);
+        let customer = Address::from([5u8; 20]);
+
+        contract.constructor(owner).unwrap();
+        vm.set_sender(owner);
+        contract.set_payment_router(router).unwrap();
+        contract.set_escrow(escrow).unwrap();
+
+        vm.set_sender(router);
+        vm.set_block_timestamp(1_000_000);
+        contract.record_payment(bodega, U256::from(1_000_000_000_000_000_000u128), U256::ZERO).unwrap();
+
+        vm.set_sender(bodega);
+        contract.set_fiado_enabled(true);
+        let debt = U256::from(1_000_000_000_000_000u128);
+        contract.extend_fiado(customer, debt).unwrap();
+
+        // Neither the bodega nor a random address can repay.
+        assert!(contract.repay_fiado(bodega, customer, debt).is_err());
+
+        // The escrow contract can (e.g. a collateral claim on default).
+        vm.set_sender(escrow);
+        let claimed = debt / U256::from(2u64);
+        contract.repay_fiado(bodega, customer, claimed).unwrap();
+        assert_eq!(contract.get_fiado_debt(bodega, customer), debt - claimed);
+
+        // The router still can too (ordinary PaymentRouter.payFiado path is unaffected).
+        vm.set_sender(router);
+        contract.repay_fiado(bodega, customer, debt - claimed).unwrap();
+        assert_eq!(contract.get_fiado_debt(bodega, customer), U256::ZERO);
     }
 }
