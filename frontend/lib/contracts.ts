@@ -6,6 +6,8 @@ import BeneficioTokenArtifact from "./abis/BeneficioToken.json";
 import InvoiceEscrowArtifact from "./abis/InvoiceEscrow.json";
 import RewardsCatalogArtifact from "./abis/RewardsCatalog.json";
 import GroupOrdersArtifact from "./abis/GroupOrders.json";
+import CreditCertificateArtifact from "./abis/CreditCertificate.json";
+import CreditLineArtifact from "./abis/CreditLine.json";
 
 /**
  * Contract addresses come from env vars, filled in after deploying with
@@ -33,6 +35,10 @@ export const rewardsCatalogAddress = process.env
   .NEXT_PUBLIC_REWARDS_CATALOG_ADDRESS as `0x${string}` | undefined;
 export const groupOrdersAddress = process.env
   .NEXT_PUBLIC_GROUP_ORDERS_ADDRESS as `0x${string}` | undefined;
+export const creditCertificateAddress = process.env
+  .NEXT_PUBLIC_CREDIT_CERTIFICATE_ADDRESS as `0x${string}` | undefined;
+export const creditLineAddress = process.env
+  .NEXT_PUBLIC_CREDIT_LINE_ADDRESS as `0x${string}` | undefined;
 
 export const paymentRouterAbi = PaymentRouterArtifact.abi;
 export const puntosTokenAbi = PuntosTokenArtifact.abi;
@@ -45,3 +51,5 @@ export const beneficioTokenAbi = BeneficioTokenArtifact.abi;
 export const invoiceEscrowAbi = InvoiceEscrowArtifact.abi as Abi;
 export const rewardsCatalogAbi = RewardsCatalogArtifact.abi as Abi;
 export const groupOrdersAbi = GroupOrdersArtifact.abi as Abi;
+export const creditCertificateAbi = CreditCertificateArtifact.abi as Abi;
+export const creditLineAbi = CreditLineArtifact.abi as Abi;

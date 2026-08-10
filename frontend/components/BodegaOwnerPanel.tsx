@@ -17,6 +17,10 @@ import {
   rewardsCatalogAddress,
   groupOrdersAbi,
   groupOrdersAddress,
+  creditCertificateAbi,
+  creditCertificateAddress,
+  creditLineAbi,
+  creditLineAddress,
 } from "@/lib/contracts";
 import { RISK_COLOR, RISK_LABEL, confianzaLabel, type AiRecommendation } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -111,6 +115,16 @@ export function BodegaOwnerPanel() {
   const [withdrawingOrderId, setWithdrawingOrderId] = useState<number | null>(null);
   const [refundingOrderId, setRefundingOrderId] = useState<number | null>(null);
   const [groupOrderActionError, setGroupOrderActionError] = useState<string | null>(null);
+  const [certificateThreshold, setCertificateThreshold] = useState("700");
+  const [isGeneratingCertificate, setIsGeneratingCertificate] = useState(false);
+  const [certificateStep, setCertificateStep] = useState<string | null>(null);
+  const [certificateError, setCertificateError] = useState<string | null>(null);
+  const [certificateConfirmed, setCertificateConfirmed] = useState(false);
+  const [borrowAmountSoles, setBorrowAmountSoles] = useState("100");
+  const [isBorrowing, setIsBorrowing] = useState(false);
+  const [borrowError, setBorrowError] = useState<string | null>(null);
+  const [repayingLoanId, setRepayingLoanId] = useState<number | null>(null);
+  const [loanActionError, setLoanActionError] = useState<string | null>(null);
   const [beneficiaryCodeInput, setBeneficiaryCodeInput] = useState("");
   const [beneficiaryAddress, setBeneficiaryAddress] = useState<Address | undefined>(undefined);
   const [isResolvingBeneficiary, setIsResolvingBeneficiary] = useState(false);
@@ -580,6 +594,154 @@ export function BodegaOwnerPanel() {
       setGroupOrderActionError("Todavía no se puede reembolsar este pedido.");
     } finally {
       setRefundingOrderId(null);
+    }
+  }
+
+  const certifiedThresholdQuery = useReadContract({
+    address: creditCertificateAddress,
+    abi: creditCertificateAbi,
+    functionName: "getCertifiedThreshold",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address && creditCertificateAddress) },
+  });
+  const certifiedThreshold = Number((certifiedThresholdQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const interestBpsQuery = useReadContract({
+    address: creditLineAddress,
+    abi: creditLineAbi,
+    functionName: "INTEREST_BPS",
+    query: { enabled: Boolean(creditLineAddress) },
+  });
+  const interestBps = Number((interestBpsQuery.data as bigint | undefined) ?? BigInt(500));
+
+  const tiersQuery = useReadContracts({
+    contracts: [0, 1, 2].map((i) => ({
+      address: creditLineAddress,
+      abi: creditLineAbi,
+      functionName: "tiers",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(creditLineAddress) },
+  });
+  const tiers = (tiersQuery.data ?? [])
+    .map((r) => (r.status === "success" ? (r.result as [bigint, bigint]) : null))
+    .filter((t): t is [bigint, bigint] => t !== null)
+    .map(([minThreshold, collateralBps]) => ({ minThreshold: Number(minThreshold), collateralBps: Number(collateralBps) }));
+  const myTierCollateralBps = tiers.find((t) => certifiedThreshold >= t.minThreshold)?.collateralBps ?? null;
+
+  const loanCountQuery = useReadContract({
+    address: creditLineAddress,
+    abi: creditLineAbi,
+    functionName: "nextLoanId",
+    query: { enabled: Boolean(creditLineAddress) },
+  });
+  const loanCount = Number((loanCountQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const loansQuery = useReadContracts({
+    contracts: Array.from({ length: loanCount }, (_, i) => ({
+      address: creditLineAddress,
+      abi: creditLineAbi,
+      functionName: "loans",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(creditLineAddress) && loanCount > 0 },
+  });
+  const myLoans = (loansQuery.data ?? [])
+    .map((r, i) => {
+      if (r.status !== "success") return null;
+      const [loanBodega, principal, collateral, loanInterestBps, dueDate, resolved] = r.result as [Address, bigint, bigint, bigint, bigint, boolean];
+      return { id: i, bodega: loanBodega, principal, collateral, interestBps: loanInterestBps, dueDate, resolved };
+    })
+    .filter((l): l is NonNullable<typeof l> => l !== null)
+    .filter((l) => address && l.bodega.toLowerCase() === (address as string).toLowerCase() && !l.resolved)
+    .reverse();
+
+  async function handleGenerateCertificate() {
+    if (!creditCertificateAddress || !smartAccountClient || !address) return;
+    setIsGeneratingCertificate(true);
+    setCertificateError(null);
+    setCertificateConfirmed(false);
+    try {
+      setCertificateStep("Consultando tu score...");
+      const attestRes = await fetch("/api/credit-certificate/attest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bodegaAddress: address, threshold: Number(certificateThreshold) }),
+      });
+      const attestation = await attestRes.json();
+      if (!attestRes.ok) throw new Error(attestation.error ?? "No se pudo firmar la atestación.");
+
+      setCertificateStep("Generando la prueba ZK (puede tardar unos segundos)...");
+      const proveRes = await fetch("/api/credit-certificate/prove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bodegaAddress: address,
+          threshold: certificateThreshold,
+          score: attestation.score,
+          issuedAt: attestation.issuedAt,
+          R8x: attestation.R8x,
+          R8y: attestation.R8y,
+          S: attestation.S,
+          oracleAx: attestation.oraclePubKey.ax,
+          oracleAy: attestation.oraclePubKey.ay,
+        }),
+      });
+      const proof = await proveRes.json();
+      if (!proveRes.ok) throw new Error(proof.error ?? "No se pudo generar la prueba.");
+
+      setCertificateStep("Enviando el certificado on-chain...");
+      const a = (proof.a as string[]).map((x) => BigInt(x));
+      const b = (proof.b as string[][]).map((row) => row.map((x) => BigInt(x)));
+      const c = (proof.c as string[]).map((x) => BigInt(x));
+      const publicSignals = (proof.publicSignals as string[]).map((x) => BigInt(x));
+
+      await sendAndWait(smartAccountClient, address, [
+        { address: creditCertificateAddress, abi: creditCertificateAbi, functionName: "submitCertificate", args: [a, b, c, publicSignals] },
+      ]);
+      setCertificateConfirmed(true);
+      certifiedThresholdQuery.refetch();
+    } catch (err) {
+      setCertificateError(err instanceof Error ? err.message : "No se pudo generar el certificado.");
+    } finally {
+      setCertificateStep(null);
+      setIsGeneratingCertificate(false);
+    }
+  }
+
+  async function handleBorrow() {
+    if (!creditLineAddress || !smartAccountClient || !address || myTierCollateralBps === null) return;
+    setIsBorrowing(true);
+    setBorrowError(null);
+    try {
+      const amountWei = parseEther(solesToEth(Number(borrowAmountSoles || "0")).toFixed(18));
+      const collateralWei = (amountWei * BigInt(myTierCollateralBps)) / BigInt(10_000);
+      await sendAndWait(smartAccountClient, address, [
+        { address: creditLineAddress, abi: creditLineAbi, functionName: "borrow", args: [amountWei], value: collateralWei },
+      ]);
+      loanCountQuery.refetch();
+      loansQuery.refetch();
+    } catch {
+      setBorrowError("No se pudo pedir el préstamo. Revisa que el pool tenga fondos suficientes.");
+    } finally {
+      setIsBorrowing(false);
+    }
+  }
+
+  async function handleRepayLoan(loanId: number, principal: bigint) {
+    if (!creditLineAddress || !smartAccountClient || !address) return;
+    setRepayingLoanId(loanId);
+    setLoanActionError(null);
+    try {
+      const owed = principal + (principal * BigInt(interestBps)) / BigInt(10_000);
+      await sendAndWait(smartAccountClient, address, [
+        { address: creditLineAddress, abi: creditLineAbi, functionName: "repay", args: [BigInt(loanId)], value: owed },
+      ]);
+      loansQuery.refetch();
+    } catch {
+      setLoanActionError("No se pudo pagar el préstamo. Intenta de nuevo.");
+    } finally {
+      setRepayingLoanId(null);
     }
   }
 
@@ -1486,6 +1648,102 @@ export function BodegaOwnerPanel() {
                 );
               })}
               {groupOrderActionError && <p className="text-xs text-red-500">{groupOrderActionError}</p>}
+            </div>
+          )}
+        </section>
+      )}
+
+      {creditCertificateAddress && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Certificado de crédito ZK</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Probá que tu score supera un mínimo (ej. &quot;≥ 700&quot;) sin mostrarle a nadie la
+            cifra exacta — un certificado que un banco, proveedor, o esta misma app pueden
+            validar.
+          </p>
+
+          {certifiedThreshold > 0 && (
+            <div className={highlightBoxClass}>
+              <p className="text-sm text-[#0a0a0b]">Certificado vigente: score ≥ {certifiedThreshold}</p>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-[#6b6d64]">Probar que mi score es al menos</span>
+            <select
+              value={certificateThreshold}
+              onChange={(e) => setCertificateThreshold(e.target.value)}
+              className="rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+            >
+              <option value="500">500</option>
+              <option value="700">700</option>
+              <option value="900">900</option>
+            </select>
+          </div>
+          <button
+            onClick={handleGenerateCertificate}
+            disabled={isGeneratingCertificate}
+            className={primaryButtonClass}
+            style={primaryButtonStyle}
+          >
+            {isGeneratingCertificate ? certificateStep ?? "Generando..." : "Generar certificado"}
+          </button>
+          {certificateError && <p className="text-xs text-red-500">{certificateError}</p>}
+          {certificateConfirmed && <p className="text-xs text-green-600">¡Listo! Certificado emitido on-chain ✓</p>}
+        </section>
+      )}
+
+      {creditLineAddress && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Línea de crédito</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Con un certificado de crédito ZK vigente, pedís prestado de un pool compartido —
+            cuanto mejor el score que probaste, menos garantía tenés que poner.
+          </p>
+
+          {myTierCollateralBps === null ? (
+            <p className="text-xs text-[#8f9189]">Necesitas un certificado de crédito ZK vigente para pedir prestado.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-[#6b6d64]">Garantía requerida en tu tier: {(myTierCollateralBps / 100).toFixed(0)}%</p>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-[#6b6d64]">Pedir prestado S/</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="10"
+                  value={borrowAmountSoles}
+                  onChange={(e) => setBorrowAmountSoles(e.target.value)}
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                />
+              </div>
+              <button onClick={handleBorrow} disabled={isBorrowing} className={outlineButtonClass}>
+                {isBorrowing ? "Pidiendo..." : "Pedir préstamo"}
+              </button>
+              {borrowError && <p className="text-xs text-red-500">{borrowError}</p>}
+            </div>
+          )}
+
+          {myLoans.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-[#0a0a0b]">Tus préstamos activos</p>
+              {myLoans.map((loan) => (
+                <div key={loan.id} className={highlightBoxClass}>
+                  <p className="text-xs text-[#6b6d64]">
+                    {formatSoles(Number(loan.principal) / 1e18)} · garantía {formatSoles(Number(loan.collateral) / 1e18)} · vence{" "}
+                    {formatPaymentDate(Number(loan.dueDate))}
+                  </p>
+                  <button
+                    onClick={() => handleRepayLoan(loan.id, loan.principal)}
+                    disabled={repayingLoanId === loan.id}
+                    className={`${outlineButtonClass} mt-2`}
+                  >
+                    {repayingLoanId === loan.id ? "Pagando..." : "Pagar préstamo"}
+                  </button>
+                </div>
+              ))}
+              {loanActionError && <p className="text-xs text-red-500">{loanActionError}</p>}
             </div>
           )}
         </section>

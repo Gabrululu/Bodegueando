@@ -17,6 +17,8 @@ import {
   rewardsCatalogAddress,
   puntosTokenAbi,
   puntosTokenAddress,
+  creditLineAbi,
+  creditLineAddress,
 } from "@/lib/contracts";
 import { confianzaLabel } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -467,6 +469,110 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     }
   }
 
+  const [lenderDepositSoles, setLenderDepositSoles] = useState("50");
+  const [isDepositing, setIsDepositing] = useState(false);
+  const [depositError, setDepositError] = useState<string | null>(null);
+  const [isWithdrawingLender, setIsWithdrawingLender] = useState(false);
+  const [withdrawLenderError, setWithdrawLenderError] = useState<string | null>(null);
+  const [liquidatingLoanId, setLiquidatingLoanId] = useState<number | null>(null);
+  const [liquidateError, setLiquidateError] = useState<string | null>(null);
+
+  const lenderSharesQuery = useReadContract({
+    address: creditLineAddress,
+    abi: creditLineAbi,
+    functionName: "lenderShares",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address && creditLineAddress) },
+  });
+  const myLenderShares = (lenderSharesQuery.data as bigint | undefined) ?? BigInt(0);
+
+  const poolBalanceQuery = useReadContract({
+    address: creditLineAddress,
+    abi: creditLineAbi,
+    functionName: "poolBalance",
+    query: { enabled: Boolean(creditLineAddress) },
+  });
+  const poolBalanceWei = (poolBalanceQuery.data as bigint | undefined) ?? BigInt(0);
+
+  const overdueLoanCountQuery = useReadContract({
+    address: creditLineAddress,
+    abi: creditLineAbi,
+    functionName: "nextLoanId",
+    query: { enabled: Boolean(creditLineAddress) },
+  });
+  const overdueLoanCount = Number((overdueLoanCountQuery.data as bigint | undefined) ?? BigInt(0));
+
+  const overdueLoansQuery = useReadContracts({
+    contracts: Array.from({ length: overdueLoanCount }, (_, i) => ({
+      address: creditLineAddress,
+      abi: creditLineAbi,
+      functionName: "loans",
+      args: [BigInt(i)],
+    })),
+    query: { enabled: Boolean(creditLineAddress) && overdueLoanCount > 0 },
+  });
+  const overdueLoans = (overdueLoansQuery.data ?? [])
+    .map((r, i) => {
+      if (r.status !== "success") return null;
+      const [loanBodega, principal, collateral, , dueDate, resolved] = r.result as [Address, bigint, bigint, bigint, bigint, boolean];
+      return { id: i, bodega: loanBodega, principal, collateral, dueDate, resolved };
+    })
+    .filter((l): l is NonNullable<typeof l> => l !== null)
+    .filter((l) => !l.resolved)
+    .reverse();
+
+  async function handleDeposit() {
+    if (!creditLineAddress || !smartAccountClient || !address) return;
+    setIsDepositing(true);
+    setDepositError(null);
+    try {
+      const amountWei = parseEther(solesToEth(Number(lenderDepositSoles || "0")).toFixed(18));
+      await sendAndWait(smartAccountClient, address, [
+        { address: creditLineAddress, abi: creditLineAbi, functionName: "deposit", args: [], value: amountWei },
+      ]);
+      lenderSharesQuery.refetch();
+      poolBalanceQuery.refetch();
+    } catch {
+      setDepositError("No se pudo depositar. Intenta de nuevo.");
+    } finally {
+      setIsDepositing(false);
+    }
+  }
+
+  async function handleWithdrawLender() {
+    if (!creditLineAddress || !smartAccountClient || !address || myLenderShares === BigInt(0)) return;
+    setIsWithdrawingLender(true);
+    setWithdrawLenderError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: creditLineAddress, abi: creditLineAbi, functionName: "withdraw", args: [myLenderShares] },
+      ]);
+      lenderSharesQuery.refetch();
+      poolBalanceQuery.refetch();
+    } catch {
+      setWithdrawLenderError("No se pudo retirar. Intenta de nuevo.");
+    } finally {
+      setIsWithdrawingLender(false);
+    }
+  }
+
+  async function handleLiquidate(loanId: number) {
+    if (!creditLineAddress || !smartAccountClient || !address) return;
+    setLiquidatingLoanId(loanId);
+    setLiquidateError(null);
+    try {
+      await sendAndWait(smartAccountClient, address, [
+        { address: creditLineAddress, abi: creditLineAbi, functionName: "liquidate", args: [BigInt(loanId)] },
+      ]);
+      overdueLoansQuery.refetch();
+      poolBalanceQuery.refetch();
+    } catch {
+      setLiquidateError("Todavía no venció este préstamo.");
+    } finally {
+      setLiquidatingLoanId(null);
+    }
+  }
+
   async function handleRepay() {
     if (!bodegaAddress || !paymentRouterAddress || !smartAccountClient || !address) return;
     setIsRepaySubmitting(true);
@@ -875,6 +981,65 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
             </div>
           ))}
           {rewardActionError && <p className="text-xs text-red-500">{rewardActionError}</p>}
+        </section>
+      )}
+
+      {isConnected && creditLineAddress && (
+        <section className={cardClass}>
+          <h2 className={sectionTitleClass}>Prestar al pool de crédito</h2>
+          <p className="text-xs text-[#6b6d64]">
+            Cualquier cuenta puede prestar acá — las bodegas con certificado de crédito ZK
+            piden prestado con garantía reducida, y lo que pagan (con interés) vuelve al pool.
+          </p>
+          <p className="text-xs text-[#6b6d64]">Fondos disponibles en el pool: {formatSoles(Number(poolBalanceWei) / 1e18)}</p>
+
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-[#6b6d64]">S/</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="10"
+              value={lenderDepositSoles}
+              onChange={(e) => setLenderDepositSoles(e.target.value)}
+              className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+            />
+            <button onClick={handleDeposit} disabled={isDepositing} className={outlineButtonClass}>
+              {isDepositing ? "..." : "Depositar"}
+            </button>
+          </div>
+          {depositError && <p className="text-xs text-red-500">{depositError}</p>}
+
+          {myLenderShares > BigInt(0) && (
+            <div className="flex items-center gap-2">
+              <button onClick={handleWithdrawLender} disabled={isWithdrawingLender} className={outlineButtonClass}>
+                {isWithdrawingLender ? "Retirando..." : "Retirar todo mi depósito"}
+              </button>
+            </div>
+          )}
+          {withdrawLenderError && <p className="text-xs text-red-500">{withdrawLenderError}</p>}
+
+          {overdueLoans.length > 0 && (
+            <div className="flex flex-col gap-2 border-t border-black/10 pt-3">
+              <p className="text-xs font-medium text-[#0a0a0b]">Préstamos activos (reclamables si ya vencieron)</p>
+              {overdueLoans.map((loan) => (
+                <div key={loan.id} className={highlightBoxClass}>
+                  <p className="text-xs text-[#6b6d64]">
+                    {formatSoles(Number(loan.principal) / 1e18)} · garantía {formatSoles(Number(loan.collateral) / 1e18)} · vence{" "}
+                    {new Date(Number(loan.dueDate) * 1000).toLocaleDateString("es-PE")}
+                  </p>
+                  <button
+                    onClick={() => handleLiquidate(loan.id)}
+                    disabled={liquidatingLoanId === loan.id}
+                    className={`${outlineButtonClass} mt-2`}
+                  >
+                    {liquidatingLoanId === loan.id ? "..." : "Reclamar (si ya venció)"}
+                  </button>
+                </div>
+              ))}
+              {liquidateError && <p className="text-xs text-red-500">{liquidateError}</p>}
+            </div>
+          )}
         </section>
       )}
 

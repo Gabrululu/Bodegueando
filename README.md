@@ -43,6 +43,9 @@ bodegueando/
 | **InvoiceEscrow** (fiado con garantía parcial) | `0x8fe870ac497708E8a123e8083f3AF32cf5b6C645` | [ver código verificado](https://sepolia.arbiscan.io/address/0x8fe870ac497708E8a123e8083f3AF32cf5b6C645#code) |
 | **RewardsCatalog** (catálogo de beneficios) | `0x6151F3CD52680E0e31bBc75c763414E8d8c70b97` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6151F3CD52680E0e31bBc75c763414E8d8c70b97#code) |
 | **GroupOrders** (compras conjuntas entre bodegas) | `0xC765E6Dd487DD03BEEcf81dF1dE6d051Fa35fcf8` | [ver código verificado](https://sepolia.arbiscan.io/address/0xC765E6Dd487DD03BEEcf81dF1dE6d051Fa35fcf8#code) |
+| **CreditCertificate** | `0xc42547586FbEfCA3D8EA189B1e87a2c234f67828` | [ver código verificado](https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code) |
+| **Groth16Verifier** (verificador ZK, autogenerado) | `0x6a61e780f9a811eA28718146A9B2F720C19359fb` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code) |
+| **CreditLine** | `0x3BE8E82DECDCf04f4AEE5dc0507eb9EdC24A4Ba9` | [ver código verificado](https://sepolia.arbiscan.io/address/0x3BE8E82DECDCf04f4AEE5dc0507eb9EdC24A4Ba9#code) |
 
 `FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
 fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `PuntosPaymaster`
@@ -396,6 +399,109 @@ posibles:
 El camino de "plazo de gracia vencido sin retiro" ya está cubierto por los tests locales, así
 que esta corrida se enfocó en los dos desenlaces principales (meta alcanzada vs. no
 alcanzada) con ETH real moviéndose entre tres cuentas distintas en Arbitrum Sepolia.
+
+### CreditCertificate — certificado de crédito con Zero-Knowledge
+
+Última pieza del roadmap: "score crediticio del bodeguero con Zero-Knowledge". Investigamos
+la fuente que motivó esto — el blog de investigación ZK de Offchain Labs (el equipo detrás
+de Arbitrum) — y vale aclarar qué encontramos ahí: es investigación a **nivel de protocolo**
+(cómo Arbitrum prueba su propia transición de estado con una arquitectura multi-prover que
+combina fraud proofs, ZK vía SP1/Succinct, y TEEs; WASM→RISC-V como ISA de entrega), no una
+guía de desarrollo de aplicaciones. No da nada directamente reusable para esto — lo que sí
+confirma es que un verificador Solidity estándar corre en Arbitrum exactamente igual que en
+cualquier chain EVM, sin nada especial que Arbitrum habilite o bloquee.
+
+`FiadoScoring.getScore`/`getPaymentHistory` ya son públicos — cualquiera los puede leer sin
+ZK. El valor real de la prueba acá no es "ocultar datos que ya son públicos on-chain", son
+dos cosas concretas: (1) una **credencial verificable y portable** ("score ≥ 700" en vez de
+la cifra exacta) que un banco/proveedor puede validar en un click sin entender los contratos
+de Bodegueando, y (2) que esa misma credencial sea **consumible on-chain** — ver
+"CreditLine" más abajo.
+
+**Stack**: Circom + snarkjs (Groth16) — nuevo subproyecto hermano de `contracts/solidity/`/
+`contracts/stylus-fiado-scoring/`: `contracts/circom-credit-certificate/`.
+
+- **El circuito** (`circuits/creditCertificate.circom`) recibe `score` y una firma EdDSA
+  privados, y `threshold`/`bodega`/pubkey-del-oráculo/`issuedAt` públicos. Usa templates ya
+  probados de `circomlib` (`Poseidon`, `EdDSAPoseidonVerifier`, `GreaterEqThan`) — nada de
+  criptografía hecha a mano. Prueba "el oráculo firmó `poseidon(bodega, score, issuedAt)` Y
+  `score >= threshold`" sin que `score` aparezca nunca en las señales públicas.
+- **Trusted setup**: reusa un archivo Powers of Tau ya publicado (ceremonia pública de
+  iden3/Hermez, estándar para circuitos chicos como este) en vez de correr una ceremonia
+  propia — la asunción de confianza real acá es el oráculo centralizado, no el setup.
+- **El oráculo ZK** (`frontend/lib/zkOracle.ts`) firma con una key EdDSA-BabyJubJub
+  (`ZK_ORACLE_PRIVATE_KEY`) — deliberadamente **distinta** de `ORACLE_PRIVATE_KEY` (que es
+  secp256k1, la curva de Ethereum, y no sirve para verificar barato dentro de un circuito).
+  `circomlibjs` firma con exactamente los mismos parámetros que el circuito verifica.
+- **`app/api/credit-certificate/attest`**: lee el score actual de `FiadoScoring` (ya
+  público) y, si supera el threshold pedido, firma la atestación — rechaza firmar si la
+  bodega tiene un default sin resolver en `CreditLine` (ver más abajo).
+- **`app/api/credit-certificate/prove`**: corre `snarkjs.groth16.fullProve` server-side (el
+  wasm + zkey pesan varios MB, no tiene sentido mandárselos al celular del bodeguero) y
+  devuelve la prueba ya formateada como el calldata que espera `submitCertificate`.
+- **`CreditCertificate.sol`** (`Ownable` — a diferencia de los otros contratos de esta
+  sesión, acá sí hace falta un ancla de confianza admin-configurable para la pubkey del
+  oráculo): `submitCertificate` llama al verificador Groth16 autogenerado
+  (`CreditCertificateVerifier.sol`, `snarkjs zkey export solidityverifier`, sin editar a
+  mano), valida que la pubkey coincida con la configurada y que la atestación no sea vieja,
+  y guarda el certificado por 30 días. `getCertifiedThreshold(bodega)` es la vista que
+  `CreditLine.sol` (o cualquier verificador externo) consulta.
+- **`app/certificado/[address]`**: página pública de solo lectura, mismo patrón que
+  `/pagar/[code]` — un banco abre el link y ve "✅ Certificado válido: score ≥ 700, vence
+  el...", leyendo directo del contrato, sin wallet.
+
+Cubierto con: 3 tests del circuito completo (`contracts/circom-credit-certificate/test/`,
+proof real generada y verificada, sin exponer el score; score insuficiente y firma
+incorrecta no pueden generar prueba) y 9 tests Foundry para `CreditCertificate.sol` (con un
+verificador mock, ya que la matemática ZK ya está cubierta a nivel de circuito).
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia** (direcciones en la tabla de
+arriba). Corrida real con la bodega de siempre (score real de 600, construido con pagos
+reales vía `receivePayment`): se generó la atestación firmada, se corrió
+`snarkjs.groth16.fullProve` de verdad contra el circuito compilado, y se envió la prueba
+on-chain pidiendo probar "score ≥ 500"
+([tx `0xa3d4bd...`](https://sepolia.arbiscan.io/tx/0xa3d4bdafb1d39ec2af7c7dbfe257ca38245ea62a83fd91dfc9ade85a72b60fa8)):
+`getCertifiedThreshold` devuelve `500` — el `600` real nunca apareció en ninguna señal
+pública ni en ningún evento.
+
+### CreditLine — línea de crédito on-chain
+
+El certificado ZK no es solo para bancos externos: también es consumible **on-chain**. Una
+bodega con score certificado pide prestado de un pool compartido con **menos garantía
+cuanto mejor el score que probó** — mismo mecanismo de garantía parcial que
+`InvoiceEscrow.sol`, solo que acá el tamaño de la garantía lo decide el score certificado,
+no la bodega.
+
+- **Pool compartido**: `deposit()`/`withdraw(shares)`, cualquiera puede prestar — patrón
+  vault simple (shares proporcionales al valor del pool), sin ERC-4626 completo.
+- **`borrow(amount)`**: solo bodegas registradas con certificado vigente. El % de garantía
+  lo determina el tier certificado (tabla fija: score≥900→15%, ≥700→30%, ≥500→50%).
+- **`repay(loanId)`**: principal + 5% de interés fijo (sin curva dinámica), de una sola vez;
+  devuelve la garantía, lo repagado vuelve al pool.
+- **`liquidate(loanId)`**: pasado el vencimiento sin repago, cualquiera puede ejecutarlo — la
+  garantía pasa al pool (compensa a los lenders) y queda registrado el default.
+
+Deliberadamente **no** es un protocolo de lending completo: sin curva de interés dinámica,
+sin oráculo de precio (todo en la misma moneda eSol/ETH, sin riesgo cross-asset), sin
+instalments. El default no toca `FiadoScoring` on-chain (agregar `CreditLine` como cuarto
+caller autorizado ahí obligaría a redesplegarlo de nuevo, como ya pasó tres veces esta
+sesión) — en cambio, `attest/route.ts` bloquea certificados nuevos mientras haya un default
+sin resolver: consecuencia reputacional real, sin acoplar más contratos entre sí.
+
+Cubierto con 15 tests Foundry (tiers de garantía, retiro insuficiente de liquidez del pool,
+repago correcto/incorrecto, liquidación antes/después del vencimiento, doble resolución).
+
+**Desplegado, verificado y corrido en vivo en Arbitrum Sepolia.** Con el certificado de
+arriba ya on-chain, la misma bodega depositó al pool, pidió prestado 0.0006 ETH con el 50%
+de garantía que le exige el tier 500 (0.0003 ETH — la mitad de lo que pediría sin
+certificado)
+([tx `0x8c2f3d...`](https://sepolia.arbiscan.io/tx/0x8c2f3d6b8fcc0faaacda5b13868b47e690b7e2f8b1b31f9d719c6183358e13d4)),
+y lo repagó completo (principal + 5% de interés)
+([tx `0x39b640...`](https://sepolia.arbiscan.io/tx/0x39b640ea3406a89fb7cb855eecb6c84a45d2085fb6588d0e76f5c0d2c1a9681b)):
+recuperó su garantía, el préstamo quedó `resolved`, y el cambio neto en su balance coincidió
+exactamente con lo esperado (`+garantía -deuda`).
+
+**109/109 tests en todo el repo** (Rust + Solidity + circuito) con este agregado.
 
 ### Circuit breaker on-chain para el oráculo de IA (probado en vivo)
 
@@ -890,6 +996,9 @@ marca qué parte de esto ya está construido y probado en testnet.
      vivo — ver "RewardsCatalog").
    - `GroupOrders.sol` — compras conjuntas entre bodegas para alcanzar el mínimo de un
      distribuidor (desplegado, verificado y probado en vivo — ver "GroupOrders").
+   - `CreditCertificate.sol` + `CreditLine.sol` — certificado de crédito con Zero-Knowledge
+     (Circom/Groth16) y línea de crédito on-chain que lo consume (implementado y testeado —
+     ver "CreditCertificate"/"CreditLine").
 4. **Backend y servicios** — API que orquesta creación de smart account, llamadas a
    contratos, scoring y notificaciones; base de datos para perfil/catálogo/métricas y
    cache de saldos para que la UX se sienta instantánea; motor de riesgo off-chain
@@ -945,7 +1054,8 @@ marca qué parte de esto ya está construido y probado en testnet.
 | `RewardsCatalog` (catálogo de beneficios canjeables entre bodegas) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (23/23 Solidity, 66/66 en todo el repo) — ver "RewardsCatalog" |
 | Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
 | `ePEN` (token propio, redimible 1:1 por soles reales) | 🔜 Roadmap — hoy la app solo convierte el monto a soles para mostrarlo (ver "Atajos"); un `ePEN` real necesitaría un emisor regulado que respalde cada token con soles en custodia (como una stablecoin bancaria), que es un problema de compliance y de rampas fiat, no solo de contrato. Construir el contrato ERC-20 en sí es trivial; lo que falta es esa pieza, y no vale la pena simularla con una paridad falsa que parezca más sólida de lo que es |
-| Score crediticio del bodeguero con Zero-Knowledge (no del cliente — del propio negocio) | 🔜 Roadmap — hoy el historial on-chain demuestra si los *clientes* de una bodega pagan bien; falta la pieza inversa, que el bodeguero use ese mismo historial de ventas para probarle su propia solidez a un banco/proveedor sin entregarle el detalle de sus ventas. Necesita una prueba ZK sobre los datos ya on-chain (ej. "mis ventas superan X" sin revelar la cifra exacta) — es la pieza que falta para que el historial sea útil también *hacia afuera*, no solo hacia sus propios clientes |
+| Score crediticio del bodeguero con Zero-Knowledge (`CreditCertificate.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia — prueba ZK real generada y verificada on-chain, ver "CreditCertificate" |
+| Línea de crédito on-chain que consume el certificado ZK (`CreditLine.sol`) | ✅ Desplegado, verificado y probado en vivo — préstamo con garantía reducida (50% en tier 500) y repago, ver "CreditLine" |
 | Compras conjuntas entre bodegas (`GroupOrders.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (19/19 Solidity, 85/85 en todo el repo) — ver "GroupOrders" |
 
 ### Flujo de demo objetivo (jurado)
@@ -1072,6 +1182,43 @@ PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> \
   forge script script/DeployGroupOrders.s.sol:DeployGroupOrders \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
+
+Deploy de `CreditCertificate` (despliega también el verificador Groth16 autogenerado; no
+necesita ningún otro contrato ya desplegado):
+
+```bash
+cd contracts/solidity
+forge script script/DeployCreditCertificate.s.sol:DeployCreditCertificate \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# después: cast send <CreditCertificateAddress> "setOraclePubKey(uint256,uint256)" <ax> <ay> ...
+# (ax/ay salen de frontend/lib/zkOracle.ts::getOraclePubKey() con el ZK_ORACLE_PRIVATE_KEY configurado)
+```
+
+Deploy de `CreditLine` (requiere `PaymentRouter` y `CreditCertificate` ya desplegados):
+
+```bash
+cd contracts/solidity
+PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> CREDIT_CERTIFICATE_ADDRESS=<dirección ya desplegada> \
+  forge script script/DeployCreditLine.s.sol:DeployCreditLine \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+### Circuito ZK (CreditCertificate)
+
+```bash
+cd contracts/circom-credit-certificate
+npm install
+npm run compile   # circom → build/creditCertificate.r1cs + .wasm
+# trusted setup (reusa un Powers of Tau público — ver README, sección "CreditCertificate"):
+npx snarkjs groth16 setup build/creditCertificate.r1cs ptau/pot15_final.ptau build/creditCertificate_0000.zkey
+npx snarkjs zkey contribute build/creditCertificate_0000.zkey build/creditCertificate_final.zkey
+npx snarkjs zkey export solidityverifier build/creditCertificate_final.zkey build/CreditCertificateVerifier.sol
+npm test   # 3 tests: prueba válida, score insuficiente, firma incorrecta
+```
+
+Los artefactos que el frontend necesita en runtime (`creditCertificate.wasm`,
+`creditCertificate.zkey`, `verification_key.json`) ya están copiados y committeados en
+`frontend/circuits/` — no hace falta regenerarlos salvo que cambie el circuito.
 
 ### Contrato Stylus (FiadoScoring)
 
