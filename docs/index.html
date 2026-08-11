@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="Resumen visual de una página de la arquitectura on-chain de Bodegueando en Arbitrum, con diagrama del flujo de pago y contratos desplegados." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%8F%AA%3C/text%3E%3C/svg%3E" />
+<title>Bodegueando — Arquitectura</title>
+<style>
+  :root {
+    --bg: #fafaf7;
+    --surface: #fffffc;
+    --surface-2: #f3f2ec;
+    --ink: #0a0a0b;
+    --ink-muted: #55564f;
+    --ink-faint: #8a8c81;
+    --border: rgba(10, 10, 11, 0.11);
+    --border-strong: rgba(10, 10, 11, 0.2);
+    --accent: #c9e265;
+    --accent-bright: #d6f17b;
+    --accent-deep: #718817;
+    --accent-ink: #0a0a0b;
+    --code-bg: rgba(10, 10, 11, 0.05);
+    --shadow: 0 1px 2px rgba(20, 20, 10, 0.04), 0 8px 24px rgba(20, 20, 10, 0.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e0e10;
+      --surface: #17181a;
+      --surface-2: #1c1d20;
+      --ink: #fafaf6;
+      --ink-muted: #b2b4ab;
+      --ink-faint: #83857c;
+      --border: rgba(255, 255, 255, 0.1);
+      --border-strong: rgba(255, 255, 255, 0.18);
+      --accent: #c9e265;
+      --accent-bright: #d6f17b;
+      --accent-deep: #d8ee8f;
+      --accent-ink: #0a0a0b;
+      --code-bg: rgba(255, 255, 255, 0.07);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e0e10;
+    --surface: #17181a;
+    --surface-2: #1c1d20;
+    --ink: #fafaf6;
+    --ink-muted: #b2b4ab;
+    --ink-faint: #83857c;
+    --border: rgba(255, 255, 255, 0.1);
+    --border-strong: rgba(255, 255, 255, 0.18);
+    --accent: #c9e265;
+    --accent-bright: #d6f17b;
+    --accent-deep: #d8ee8f;
+    --accent-ink: #0a0a0b;
+    --code-bg: rgba(255, 255, 255, 0.07);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 56px 28px 96px;
+  }
+
+  h1, h2, h3 {
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-faint);
+  }
+  .eyebrow::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    background: var(--accent-deep);
+    flex-shrink: 0;
+  }
+
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+  }
+
+  .accentitalic {
+    font-family: Georgia, "Times New Roman", serif;
+    font-style: italic;
+    font-weight: 400;
+    color: var(--accent-deep);
+  }
+
+  a { color: inherit; }
+  a.link {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
+  }
+  a.link:hover { text-decoration-color: currentColor; }
+
+  /* ---------- header ---------- */
+  header.top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-bottom: 40px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand svg { width: 34px; height: 34px; flex-shrink: 0; }
+  .brand span {
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 800;
+    font-size: 19px;
+    letter-spacing: -0.02em;
+  }
+  nav.top-links {
+    display: flex;
+    gap: 20px;
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+  nav.top-links a { text-decoration: none; color: var(--ink-muted); }
+  nav.top-links a:hover { color: var(--ink); }
+
+  /* ---------- hero ---------- */
+  .hero h1 {
+    font-size: clamp(2rem, 4.4vw, 2.9rem);
+    line-height: 1.02;
+    max-width: 15ch;
+  }
+  .hero p.lede {
+    max-width: 62ch;
+    font-size: 17px;
+    color: var(--ink-muted);
+    margin-top: 18px;
+  }
+  .hero-meta {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+    margin-top: 28px;
+  }
+  .hero-meta div { display: flex; flex-direction: column; gap: 2px; }
+  .hero-meta .num {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-weight: 700;
+    font-size: 20px;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-meta .lbl { font-size: 12px; color: var(--ink-faint); }
+
+  /* ---------- sections ---------- */
+  section { margin-top: 64px; }
+  section > h2 {
+    font-size: clamp(1.3rem, 2.4vw, 1.6rem);
+    margin-top: 10px;
+  }
+  section > p.dek {
+    max-width: 68ch;
+    color: var(--ink-muted);
+    margin-top: 10px;
+    font-size: 15px;
+  }
+
+  /* ---------- diagram ---------- */
+  figure.diagram {
+    margin: 28px 0 0;
+    padding: 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  figure.diagram svg { display: block; width: 100%; height: auto; min-width: 640px; }
+  figure.diagram figcaption {
+    margin-top: 14px;
+    font-size: 13px;
+    color: var(--ink-faint);
+    max-width: 70ch;
+  }
+  .node-fill { fill: var(--surface-2); }
+  .node-stroke { stroke: var(--border-strong); }
+  .node-accent-fill { fill: var(--accent); }
+  .node-accent-stroke { stroke: var(--accent-deep); }
+  .diagram-text { fill: var(--ink); font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+  .diagram-text-accent { fill: var(--accent-ink); font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+  .diagram-label { fill: var(--ink-faint); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .diagram-line { stroke: var(--ink-faint); fill: none; }
+  .diagram-line-dashed { stroke: var(--ink-faint); fill: none; stroke-dasharray: 4 4; }
+
+  /* ---------- contract cards ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 12px;
+    margin-top: 24px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card .name { font-weight: 700; font-size: 14.5px; letter-spacing: -0.01em; }
+  .card .desc { font-size: 13px; color: var(--ink-muted); line-height: 1.45; flex-grow: 1; }
+  .card .addr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--ink-faint);
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 6px 9px;
+    margin-top: 4px;
+  }
+  .card .addr a { text-decoration: none; font-weight: 600; color: var(--accent-deep); flex-shrink: 0; }
+  .card .addr a:hover { text-decoration: underline; }
+  .card .addr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- offchain list ---------- */
+  .stripe-list { display: flex; flex-direction: column; margin-top: 22px; border-top: 1px solid var(--border); }
+  .stripe { display: grid; grid-template-columns: 200px 1fr; gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+  .stripe .k { font-weight: 700; font-size: 14px; }
+  .stripe .v { font-size: 14px; color: var(--ink-muted); }
+
+  /* ---------- business model ---------- */
+  .biz-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+    margin-top: 24px;
+  }
+  .biz-card {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    background: var(--surface);
+  }
+  .biz-card .who {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent-deep);
+  }
+  .biz-card p { font-size: 13.5px; color: var(--ink-muted); margin: 8px 0 0; line-height: 1.5; }
+  .biz-note {
+    margin-top: 18px;
+    font-size: 13px;
+    color: var(--ink-faint);
+    border-left: 2px solid var(--border-strong);
+    padding-left: 14px;
+  }
+
+  /* ---------- roadmap ---------- */
+  .roadmap { margin-top: 22px; display: flex; flex-direction: column; gap: 14px; }
+  .rm-item { display: flex; gap: 16px; align-items: baseline; }
+  .rm-status {
+    flex-shrink: 0;
+    width: 128px;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent-deep);
+  }
+  .rm-item p { margin: 0; font-size: 14px; color: var(--ink-muted); }
+  .rm-item strong { color: var(--ink); }
+
+  /* ---------- footer ---------- */
+  footer {
+    margin-top: 80px;
+    padding-top: 28px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--ink-faint);
+  }
+  footer a { text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+  footer a:hover { text-decoration-color: currentColor; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .card, nav.top-links a { transition: border-color 0.15s ease, color 0.15s ease; }
+    .card:hover { border-color: var(--border-strong); }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 64 64" role="img" aria-label="Bodegueando">
+        <defs>
+          <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#d6f17b" />
+            <stop offset="100%" stop-color="#c9e265" />
+          </linearGradient>
+        </defs>
+        <rect width="64" height="64" rx="15" fill="url(#badge)" />
+        <path d="M12,18 L52,18 L47,28 L42,22 L37,28 L32,22 L27,28 L22,22 L17,28 L12,22 Z" fill="#0a0a0b" />
+        <rect x="14" y="30" width="36" height="22" rx="3" fill="#0a0a0b" />
+        <rect x="27" y="40" width="10" height="12" fill="#fafaf7" />
+      </svg>
+      <span>Bodegueando</span>
+    </div>
+    <nav class="top-links">
+      <a href="https://github.com/Gabrululu/Bodegueando" target="_blank" rel="noopener">Repositorio</a>
+      <a href="https://github.com/Gabrululu/Bodegueando/blob/main/README.md" target="_blank" rel="noopener">README</a>
+      <a href="https://github.com/Gabrululu/Bodegueando/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">Arquitectura completa</a>
+    </nav>
+  </header>
+
+  <section class="hero" style="margin-top:0;">
+    <p class="eyebrow">Arquitectura</p>
+    <h1 style="margin-top:14px;">Cobrar, ganar puntos y fiar,<br /><span class="accentitalic">con Arbitrum por dentro.</span></h1>
+    <p class="lede">
+      Bodegueando digitaliza la bodega de barrio sin pedirle que cambie cómo cobra. Por encima
+      de cada venta en soles, una capa on-chain en Arbitrum registra el pago, acuña cashback y
+      construye el historial que hoy no existe para este segmento — todo desplegado, verificado
+      y probado con transacciones reales en Arbitrum Sepolia, no en un entorno simulado.
+    </p>
+    <div class="hero-meta">
+      <div><span class="num">11</span><span class="lbl">contratos desplegados</span></div>
+      <div><span class="num">227+</span><span class="lbl">tests (Rust + Solidity + circuito)</span></div>
+      <div><span class="num">1</span><span class="lbl">contrato Stylus (Rust)</span></div>
+      <div><span class="num">0%</span><span class="lbl">comisión por cobrar</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Mecanismo</p>
+    <h2>De un pago con el celular a un cashback on-chain</h2>
+    <p class="dek">
+      El bodeguero y el cliente nunca ven "gas", "wallet" ni una dirección — por dentro, cada
+      pago es una <code>UserOperation</code> patrocinada (ERC-4337) que un contrato routea,
+      acuña puntos, registra el historial de fiado y avisa por Telegram, en una sola firma.
+    </p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 1120 540" role="img" aria-label="Diagrama: un pago va del celular del cliente, por login sin wallet y una UserOperation patrocinada por el paymaster, hasta PaymentRouter en Arbitrum, que acuña cashback en PuntosToken, registra el historial en FiadoScoring y avisa por Telegram; FiadoScoring además intercambia datos con un oráculo de IA que solo puede subir el límite hasta el doble del heurístico.">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor" style="color:var(--ink-faint)"></path>
+          </marker>
+        </defs>
+
+        <!-- A: Cliente/Bodeguero -->
+        <rect x="16" y="196" width="150" height="72" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
+        <text x="91" y="226" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">Cliente /</text>
+        <text x="91" y="243" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">Bodeguero</text>
+        <text x="91" y="259" text-anchor="middle" class="diagram-label" font-size="10">celular, sin wallet</text>
+
+        <!-- arrow A->B -->
+        <line x1="166" y1="232" x2="228" y2="232" class="diagram-line" stroke-width="1.3" marker-end="url(#arrow)"></line>
+        <text x="197" y="222" text-anchor="middle" class="diagram-label" font-size="10">login</text>
+
+        <!-- B: Smart Account -->
+        <rect x="228" y="188" width="190" height="88" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
+        <text x="323" y="216" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">Smart Account</text>
+        <text x="323" y="233" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">(ERC-4337)</text>
+        <text x="323" y="251" text-anchor="middle" class="diagram-label" font-size="10">wallet embebida,</text>
+        <text x="323" y="264" text-anchor="middle" class="diagram-label" font-size="10">firma la wallet de Privy</text>
+
+        <!-- arrow B->C -->
+        <line x1="418" y1="232" x2="480" y2="232" class="diagram-line" stroke-width="1.3" marker-end="url(#arrow)"></line>
+        <text x="449" y="222" text-anchor="middle" class="diagram-label" font-size="10">UserOperation</text>
+
+        <!-- C: Bundler + Paymaster -->
+        <rect x="480" y="180" width="215" height="104" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
+        <text x="587" y="207" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">Bundler (Pimlico) +</text>
+        <text x="587" y="224" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">PuntosPaymaster.sol</text>
+        <text x="587" y="242" text-anchor="middle" class="diagram-label" font-size="10">gas patrocinado —</text>
+        <text x="587" y="255" text-anchor="middle" class="diagram-label" font-size="10">bodega: siempre gratis</text>
+        <text x="587" y="268" text-anchor="middle" class="diagram-label" font-size="10">comprador: 5 tx gratis, después PUNTOS</text>
+
+        <!-- arrow C->D -->
+        <line x1="695" y1="232" x2="757" y2="232" class="diagram-line" stroke-width="1.3" marker-end="url(#arrow)"></line>
+
+        <!-- D: PaymentRouter (hub, accent) -->
+        <rect x="757" y="196" width="168" height="72" rx="12" class="node-accent-fill node-accent-stroke" stroke-width="1.4"></rect>
+        <text x="841" y="228" text-anchor="middle" class="diagram-text-accent" font-size="13.5" font-weight="800">PaymentRouter</text>
+        <text x="841" y="245" text-anchor="middle" class="diagram-text-accent" font-size="10" opacity="0.75">Arbitrum · verificado</text>
+
+        <!-- arrow D->E (up to PuntosToken) -->
+        <path d="M925,210 C965,190 985,160 1000,132" class="diagram-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"></path>
+        <text x="990" y="172" text-anchor="middle" class="diagram-label" font-size="10">mint cashback</text>
+
+        <!-- E: PuntosToken -->
+        <rect x="945" y="60" width="150" height="66" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
+        <text x="1020" y="87" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700">PuntosToken</text>
+        <text x="1020" y="103" text-anchor="middle" class="diagram-label" font-size="10">ERC-20, cashback 2%</text>
+
+        <!-- arrow D->F (down to FiadoScoring) -->
+        <path d="M925,254 C965,278 985,300 1000,322" class="diagram-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"></path>
+        <text x="994" y="300" text-anchor="middle" class="diagram-label" font-size="10">registra pago</text>
+
+        <!-- F: FiadoScoring -->
+        <rect x="945" y="322" width="150" height="72" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
+        <text x="1020" y="350" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700">FiadoScoring</text>
+        <text x="1020" y="366" text-anchor="middle" class="diagram-label" font-size="10">Stylus (Rust) · score</text>
+        <text x="1020" y="380" text-anchor="middle" class="diagram-label" font-size="10">y fiado por cliente</text>
+
+        <!-- arrow D -> G (Telegram, down) -->
+        <path d="M841,268 C841,320 780,350 720,368" class="diagram-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"></path>
+        <text x="778" y="345" text-anchor="middle" class="diagram-label" font-size="10">avisa el pago</text>
+
+        <!-- G: Bot Telegram -->
+        <rect x="560" y="368" width="160" height="64" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
+        <text x="640" y="394" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700">Bot de Telegram</text>
+        <text x="640" y="410" text-anchor="middle" class="diagram-label" font-size="10">webhook, en soles</text>
+
+        <!-- F <-> H dashed loop: Oráculo IA -->
+        <path d="M945,388 C880,418 840,438 800,450" class="diagram-line-dashed" stroke-width="1.2" fill="none" marker-end="url(#arrow)"></path>
+        <path d="M800,470 C840,476 880,462 945,422" class="diagram-line-dashed" stroke-width="1.2" fill="none" marker-end="url(#arrow)"></path>
+        <text x="875" y="440" text-anchor="middle" class="diagram-label" font-size="10">historial →</text>
+        <text x="875" y="490" text-anchor="middle" class="diagram-label" font-size="10">← ajuste ≤ 2×</text>
+
+        <!-- H: Oráculo IA -->
+        <rect x="640" y="446" width="160" height="56" rx="12" class="node-fill node-stroke" stroke-width="1" stroke-dasharray="3 3"></rect>
+        <text x="720" y="471" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700">Oráculo de IA</text>
+        <text x="720" y="487" text-anchor="middle" class="diagram-label" font-size="10">Claude · acotado on-chain</text>
+      </svg>
+      <figcaption>
+        Un pago sale del celular del cliente sin que vea gas ni wallet, patrocinado por
+        <code>PuntosPaymaster</code>, y termina repartido en tres efectos on-chain — cashback,
+        historial de fiado, aviso por Telegram — más un circuit breaker que limita cuánto puede
+        ajustar la IA el límite de fiado sin historial real detrás.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <p class="eyebrow">On-chain — Arbitrum Sepolia</p>
+    <h2>Once contratos, cada uno con un trabajo puntual</h2>
+    <p class="dek">
+      Todos verificados — Solidity con código fuente legible en Arbiscan, <code>FiadoScoring</code>
+      con un build reproducible vía <code>cargo stylus verify</code>.
+    </p>
+    <div class="grid">
+
+      <div class="card">
+        <div class="name">PaymentRouter</div>
+        <div class="desc">Recibe cada pago, acuña cashback, registra el historial y da de alta bodegas self-service.</div>
+        <div class="addr"><span>0xdb1f…191F</span><a href="https://sepolia.arbiscan.io/address/0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">FiadoScoring <span class="mono" style="color:var(--ink-faint);font-weight:400;">· Stylus</span></div>
+        <div class="desc">Score y límite de fiado heurístico en Rust/WASM — el único contrato que no es Solidity, por el costo del cómputo repetido.</div>
+        <div class="addr"><span>0x22FD…80B2</span><a href="https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">PuntosToken</div>
+        <div class="desc">ERC-20 de cashback, libre y transferible — se gana pagando, se gasta en gas o en el catálogo de beneficios.</div>
+        <div class="addr"><span>0x2bd8…12de</span><a href="https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">PuntosPaymaster</div>
+        <div class="desc">Paymaster ERC-4337: patrocina siempre a las bodegas y las primeras 5 transacciones de cada comprador.</div>
+        <div class="addr"><span>0xa00d…6403</span><a href="https://sepolia.arbiscan.io/address/0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">InvoiceEscrow</div>
+        <div class="desc">Fiado con garantía parcial — vía adicional para montos donde la bodega prefiere pedir un depósito.</div>
+        <div class="addr"><span>0x9903…7a4</span><a href="https://sepolia.arbiscan.io/address/0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">RewardsCatalog</div>
+        <div class="desc">Catálogo de beneficios por bodega, pagado en PUNTOS y canjeable en cualquier bodega de la red.</div>
+        <div class="addr"><span>0x0c07…44a2f</span><a href="https://sepolia.arbiscan.io/address/0x0c07b1b63aAbAD36d15877D80f10411534C44a2f#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">GroupOrders</div>
+        <div class="desc">Compras conjuntas entre bodegas cercanas para alcanzar el pedido mínimo de un distribuidor.</div>
+        <div class="addr"><span>0xfA47…2EB0</span><a href="https://sepolia.arbiscan.io/address/0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">CreditCertificate</div>
+        <div class="desc">Certificado de crédito con Zero-Knowledge (Circom/Groth16) — "score ≥ 700" sin revelar la cifra.</div>
+        <div class="addr"><span>0xc425…8828</span><a href="https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">Groth16Verifier</div>
+        <div class="desc">Verificador ZK autogenerado por <code>snarkjs</code> — sin una línea editada a mano.</div>
+        <div class="addr"><span>0x6a61…359fb</span><a href="https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">CreditLine</div>
+        <div class="desc">Línea de crédito on-chain que consume el certificado ZK — menos garantía cuanto mejor el score probado.</div>
+        <div class="addr"><span>0x7135…4F29</span><a href="https://sepolia.arbiscan.io/address/0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+      <div class="card">
+        <div class="name">BeneficioToken</div>
+        <div class="desc">PoC de programas sociales: token restringido, solo gastable en una bodega registrada, nunca revendible.</div>
+        <div class="addr"><span>0x1ffb…F8Bc</span><a href="https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code" target="_blank" rel="noopener">ver ↗</a></div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Fuera de la cadena</p>
+    <h2>Lo que no necesita ser trustless</h2>
+    <p class="dek">Ubicación, códigos de 6 dígitos y perfiles de Telegram son metadata de UX — viven en Redis, no en un contrato, a propósito.</p>
+    <div class="stripe-list">
+      <div class="stripe"><div class="k">Login</div><div class="v">Privy (celular/correo/passkey) — crea una wallet embebida invisible en el primer login, nunca "conecta tu wallet".</div></div>
+      <div class="stripe"><div class="k">Oráculo de IA</div><div class="v">Claude Opus lee el historial on-chain y propone score/límite en español simple — acotado por el circuit breaker de <code>FiadoScoring</code>.</div></div>
+      <div class="stripe"><div class="k">Bot de Telegram</div><div class="v">Webhook en producción (no polling — Vercel no corre daemons), avisa pagos y responde <code>/perfil</code>, siempre en soles.</div></div>
+      <div class="stripe"><div class="k">Mapa de bodegas</div><div class="v">MapLibre + tiles de CARTO — cada bodega guarda su ubicación, el cliente paga directo desde el pin.</div></div>
+      <div class="stripe"><div class="k">Storage</div><div class="v">Upstash Redis en producción, con fallback automático a archivo local en desarrollo.</div></div>
+      <div class="stripe"><div class="k">Tasa de cambio</div><div class="v">ETH → PEN de solo lectura y cacheada — puramente de display, nadie ve "ETH" en la app.</div></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Modelo de negocio</p>
+    <h2>Cobrar sigue siendo gratis para la bodega</h2>
+    <p class="dek">
+      Ningún ingreso sale del bolsillo del bodeguero por su venta diaria — los cuatro mecanismos
+      le cobran a quien recibe un valor nuevo real, y ninguno está activado todavía: primero
+      infraestructura y confianza, después monetización.
+    </p>
+    <div class="biz-grid">
+      <div class="biz-card">
+        <div class="who">Bancos / microfinancieras</div>
+        <p>Pagan por consultar el certificado de crédito — mismo modelo que un buró de crédito tradicional.</p>
+      </div>
+      <div class="biz-card">
+        <div class="who">Bodegas, opcional</div>
+        <p>Spread pequeño sobre el interés de <code>CreditLine</code>, solo si eligen pedir prestado.</p>
+      </div>
+      <div class="biz-card">
+        <div class="who">Distribuidores</div>
+        <p>Comisión de intermediación sobre la demanda ya agregada en <code>GroupOrders</code>.</p>
+      </div>
+      <div class="biz-card">
+        <div class="who">Programas sociales</div>
+        <p>Cuota de administración sobre <code>BeneficioToken</code>, muy por debajo de la filtración actual.</p>
+      </div>
+    </div>
+    <p class="biz-note">
+      El mecanismo 1 (consulta de certificado) es el primero en poder activarse — no depende de
+      liquidez profunda ni de un acuerdo externo, solo de bodegas con certificados reales. Mientras
+      tanto, el gas patrocinado y el futuro on/off-ramp son costo operativo, no ingreso.
+    </p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Roadmap</p>
+    <h2>Lo que sigue</h2>
+    <div class="roadmap">
+      <div class="rm-item">
+        <div class="rm-status">Próximas semanas</div>
+        <p><strong>Notificaciones por WhatsApp</strong>, junto a Telegram — stub ya construido, con los TODOs concretos que faltan.</p>
+      </div>
+      <div class="rm-item">
+        <div class="rm-status">En planes</div>
+        <p><strong>eSol real</strong> — integrar un proveedor de conversión soles↔saldo on-chain ya autorizado en Perú, no emitir un token propio. No le agrega costo al cashback: el margen de la conversión se absorbe como costo de plataforma, igual que ya se hace con el gas.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Bodegueando · Arbitrum Sepolia · hecho para bodegas de barrio del Perú</span>
+    <span>
+      <a href="https://github.com/Gabrululu/Bodegueando" target="_blank" rel="noopener">github.com/Gabrululu/Bodegueando</a>
+    </span>
+  </footer>
+
+</div>
+</body>
+</html>
