@@ -6,9 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "postinstall": "node scripts/copy-maplibre-worker.mjs",
     "lint": "eslint",
     "bot": "node --env-file=.env.local scripts/telegram-bot.mjs",
-    "check-paymaster-balance": "node --env-file=.env.local scripts/check-paymaster-balance.mjs"
+    "check-paymaster-balance": "node --env-file=.env.local scripts/check-paymaster-balance.mjs",
+    "migrate-bodega-codes": "node --env-file=.env.local scripts/migrate-bodega-codes.mjs",
+    "check-code-capacity": "node --env-file=.env.local scripts/check-code-capacity.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

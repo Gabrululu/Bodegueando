@@ -42,12 +42,15 @@ cuanto mejor el score probado — ver ARCHITECTURE.md, secciones CreditCertifica
 
 **4. Onboarding sin fricción.** El usuario entra con su celular, correo o passkey, sin crear
 ni entender una wallet. Cada persona tiene una cuenta inteligente (ERC-4337) cuyo gas se paga
-con sus propios puntos.
+con sus propios puntos de cashback — nunca con dinero aparte, igual que no existe un "cargo de
+red" en Yape o Plin. La bodega es un caso distinto a propósito: como no cobra cashback por
+recibir pagos (el cashback es del comprador), sus propias acciones (activar fiado, fiarle a un
+cliente, publicar un beneficio) las patrocina la plataforma siempre, sin tocar puntos — nunca
+tiene que pensar en gas, punto.
 
 **5. Notificaciones.** Un bot de Telegram avisa al bodeguero cuando le pagan y muestra su
-perfil —ventas, nivel de confianza, fiado disponible— todo en soles. (WhatsApp está en
-roadmap: la integración depende de una aprobación de permisos de Meta que todavía está
-pendiente, por eso Telegram salió primero — mismo objetivo, sin ese trámite de por medio.)
+perfil —ventas, nivel de confianza, fiado disponible— todo en soles. (WhatsApp llega en las
+próximas semanas — por eso Telegram salió primero: mismo objetivo, disponible de inmediato.)
 
 Alrededor de ese núcleo, la plataforma ya suma piezas adicionales construidas sobre el mismo
 historial on-chain: fiado con garantía parcial (`InvoiceEscrow`) para montos donde la bodega
@@ -120,7 +123,7 @@ De ahí se desprenden varios problemas concretos, todos con la misma raíz:
   Cuando busca un préstamo de una microfinanciera para capital de trabajo, se lo niegan o se
   lo dan mínimo — no porque el negocio sea débil, sino porque no tiene con qué respaldarse
   frente a un analista de crédito.
-- **Programas sociales que no llegan bien.** Un programa como Vaso de Leche o Pensión 65
+- **Programas sociales que no llegan bien.** Un programa como Vaso de Leche o Programas Municipales
   depende de intermediarios para distribuir beneficios en barrios donde, otra vez, la bodega
   es el punto más cercano — pero hoy no hay ningún registro verificable de esos negocios que
   facilite esa distribución.
@@ -211,6 +214,68 @@ protocolo en el contrato, o un cobro fuera de la cadena para las consultas B2B/B
 dejó fuera de esta primera versión a propósito: primero construir la infraestructura y la
 confianza, después cobrar por lo que sí genera valor nuevo — nunca al revés.
 
+### La infraestructura para cobrar ya está construida, no es solo un plan
+
+Los cuatro mecanismos de arriba no son una lista de deseos: cada uno tiene, hoy, el contrato
+que lo soporta ya desplegado y probado en Arbitrum Sepolia — activar el cobro es prender un
+interruptor sobre algo que ya funciona, no construirlo desde cero.
+
+- **Mecanismo 1 (consulta de certificado)** — `CreditCertificate.sol` ya emite el certificado
+  ZK y `getCertifiedThreshold` ya es la vista pública que una entidad financiera consultaría;
+  falta solo el cobro por esa consulta, que puede vivir fuera de la cadena (una API B2B/B2G) sin
+  tocar el contrato.
+- **Mecanismo 2 (spread de `CreditLine`)** — el pool de préstamos, los tiers de garantía por
+  score, y el cobro de interés fijo (5%) ya existen y ya se probaron en vivo con un préstamo
+  real repagado; falta solo una constante de protocolo que retenga una porción de ese interés
+  en vez de devolverlo 100% al fondo.
+- **Mecanismo 3 (comisión de `GroupOrders`)** — el flujo completo de aportar, alcanzar meta y
+  retirar ya está probado en vivo con ETH real moviéndose entre bodegas; falta solo un
+  porcentaje de protocolo sobre el retiro.
+- **Mecanismo 4 (cuota sobre `BeneficioToken`)** — la emisión, el vencimiento y la restricción
+  de gasto a bodegas registradas ya funcionan; falta solo una cuota de administración,
+  cobrable al programa social que emite, no al beneficiario.
+
+**Por qué el mecanismo 1 es el primero en activarse en la práctica.** De los cuatro, es el que
+menos depende de acumular volumen o de un socio externo: no necesita liquidez profunda como el
+mecanismo 2, ni un acuerdo logístico con un distribuidor como el 3, ni un convenio estatal como
+el 4. En cuanto existan bodegas reales con certificados reales, alcanza con una sola entidad
+financiera dispuesta a pagar por consultar un score para empezar a generar ingreso — sin tocar
+ni redesplegar ningún contrato del resto del producto.
+
+**El costo real que hay que cubrir mientras tanto.** Cobrar cero por transacción es la promesa
+central del proyecto, pero operar no es gratis: el gas patrocinado (`PuntosPaymaster`) y, a
+futuro, el costo de convertir soles reales hacia y desde la app (ver más abajo) son gastos
+reales de la plataforma desde el primer día, sin que ningún ingreso los cubra todavía. Esa
+brecha se cierra con capital semilla o de programa (no con una cuota al bodeguero) hasta que el
+mecanismo 1 — el más rápido de los cuatro — empiece a generar ingreso real.
+
+### El paso a soles reales (eSol) no le agrega costo a nadie
+
+Hoy el pago usa ETH de testnet como equivalente de soles (ver "Atajos" en ARCHITECTURE.md). El
+plan para reemplazarlo por soles reales on-chain no es construir un banco ni emitir una moneda
+propia — es **integrar con un proveedor de conversión soles↔saldo on-chain ya autorizado para
+operar en Perú**, evaluado en su momento sin comprometerse hoy a uno en particular. Construir
+esa pieza desde cero (licencia, reservas propias, atestación) es un proyecto de otra escala,
+con riesgos regulatorios reales; integrarse a uno que ya exista es lo que sí se puede activar
+en un plazo razonable.
+
+Ese cambio de activo **no toca el mecanismo del cashback en absoluto.** Los puntos que gana un
+cliente en cada compra nunca salen del monto que paga ni de lo que recibe la bodega —
+`PaymentRouter` los acuña aparte, como supply nuevo, exactamente igual que un programa de
+millas o el sello de fidelidad de una tienda: nadie paga de más para que existan. Eso es cierto
+hoy con ETH de testnet y sigue siendo cierto el día que el activo detrás sea soles reales — el
+código que acuña PUNTOS no cambia, porque nunca dependió de qué activo se usó para pagar.
+
+Lo único que sí tiene un costo real en ese cambio es la conversión misma (el proveedor de
+on/off-ramp cobra un margen, como cualquier cambio de moneda) — y ahí Bodegueando ya tiene el
+patrón para absorberlo sin que el usuario lo note: es el mismo que usa hoy con el gas.
+`PuntosPaymaster` ya paga un costo real (el gas en Arbitrum) por cada transacción y lo esconde
+del usuario, patrocinándolo la plataforma en vez de cobrárselo — probado en vivo, no en teoría.
+El margen del on/off-ramp se puede absorber con la misma lógica: costo operativo de la
+plataforma, nunca una comisión visible para el bodeguero o el comprador. Quien paga sigue
+viendo exactamente lo mismo que ve hoy — un monto en soles y un botón — sin importar qué pasa
+por debajo.
+
 *Fuentes: [Equifax Perú — Reporte Infocorp](https://www.equifax.pe/personas/productos/reporte-infocorp-credito/)
 (modelo de cobro a entidades financieras, consulta gratuita anual del consumidor por Ley
 27489); MEF, "Caracterización del Programa del Vaso de Leche" y balance de políticas sociales
@@ -223,8 +288,8 @@ automatizados y corridas en vivo con transacciones reales (no simuladas): cobro 
 fiado con libro de deuda real, circuit breaker on-chain del oráculo de IA, fiado con garantía
 parcial, catálogo de beneficios, compras conjuntas entre bodegas, certificado de crédito ZK y
 línea de crédito on-chain que lo consume, login sin wallet con gas pagado en puntos, bot de
-Telegram, y mapa de bodegas cercanas. Pendiente de terceros: WhatsApp (aprobación de Meta) y
-rampas eSol ↔ PEN reales.
+Telegram, y mapa de bodegas cercanas. En camino: notificaciones por WhatsApp (próximas
+semanas). Pendiente de terceros: rampas eSol ↔ PEN reales.
 
 El detalle de cada pieza — mecanismo, qué NO resuelve a propósito, cobertura de tests, y la
 corrida en vivo con los hashes de transacción reales — está en

@@ -40,13 +40,13 @@ const sectionTitleClass =
 const inputClass =
   "rounded-xl border border-black/15 bg-white px-3 py-2 text-center text-lg font-semibold tracking-widest text-[#0a0a0b] outline-none focus:border-black/35";
 const primaryButtonClass =
-  "cursor-pointer rounded-full px-4 py-2 text-sm font-semibold text-[#0a0a0b] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0";
+  "inline-flex min-h-11 cursor-pointer items-center justify-center rounded-full px-4 py-2 text-sm font-semibold text-[#0a0a0b] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0";
 const primaryButtonStyle = {
   background: "linear-gradient(180deg, #d6f17b 0%, #c9e265 100%)",
   boxShadow: "inset 0 1px #ffffff75, 0 8px 20px #6e841b38",
 };
 const outlineButtonClass =
-  "cursor-pointer rounded-full border border-black/15 px-4 py-2 text-sm font-semibold text-[#0a0a0b] transition-colors hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-11 cursor-pointer items-center justify-center rounded-full border border-black/15 px-4 py-2 text-sm font-semibold text-[#0a0a0b] transition-colors hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-50";
 const highlightBoxClass = "rounded-xl border border-black/5 bg-[#c9e26514] p-4";
 
 function formatPaymentDate(unixSeconds: number): string {
@@ -218,7 +218,7 @@ export function BodegaOwnerPanel() {
     fetch("/api/bodega/code", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address }),
+      body: JSON.stringify({ address, pool: "bodega" }),
     })
       .then((res) => res.json())
       .then((data) => setBodegaCode(data.code ?? null))
@@ -837,7 +837,7 @@ export function BodegaOwnerPanel() {
     availableFiadoQuery.refetch();
   };
 
-  const isValidCustomerCodeFormat = /^\d{6}$/.test(customerCodeInput.trim());
+  const isValidCustomerCodeFormat = /^\d{6,9}$/.test(customerCodeInput.trim());
 
   useEffect(() => {
     if (!isValidCustomerCodeFormat) return;
@@ -848,7 +848,7 @@ export function BodegaOwnerPanel() {
       setIsResolvingCustomer(true);
       setCustomerNotFound(false);
       try {
-        const res = await fetch(`/api/bodega/code?code=${code}`);
+        const res = await fetch(`/api/bodega/code?code=${code}&pool=buyer`);
         const data = await res.json();
         if (cancelled) return;
         if (data.address) {
@@ -876,13 +876,13 @@ export function BodegaOwnerPanel() {
   function handleCustomerCodeChange(value: string) {
     const trimmed = value.trim();
     setCustomerCodeInput(trimmed);
-    if (!/^\d{6}$/.test(trimmed)) {
+    if (!/^\d{6,9}$/.test(trimmed)) {
       setCustomerAddress(undefined);
       setCustomerNotFound(false);
     }
   }
 
-  const isValidBeneficiaryCodeFormat = /^\d{6}$/.test(beneficiaryCodeInput.trim());
+  const isValidBeneficiaryCodeFormat = /^\d{6,9}$/.test(beneficiaryCodeInput.trim());
 
   useEffect(() => {
     if (!isValidBeneficiaryCodeFormat) return;
@@ -893,7 +893,7 @@ export function BodegaOwnerPanel() {
       setIsResolvingBeneficiary(true);
       setBeneficiaryNotFound(false);
       try {
-        const res = await fetch(`/api/bodega/code?code=${code}`);
+        const res = await fetch(`/api/bodega/code?code=${code}&pool=buyer`);
         const data = await res.json();
         if (cancelled) return;
         if (data.address) {
@@ -921,7 +921,7 @@ export function BodegaOwnerPanel() {
   function handleBeneficiaryCodeChange(value: string) {
     const trimmed = value.trim();
     setBeneficiaryCodeInput(trimmed);
-    if (!/^\d{6}$/.test(trimmed)) {
+    if (!/^\d{6,9}$/.test(trimmed)) {
       setBeneficiaryAddress(undefined);
       setBeneficiaryNotFound(false);
     }
@@ -1305,7 +1305,7 @@ export function BodegaOwnerPanel() {
                 inputMode="numeric"
                 value={customerCodeInput}
                 onChange={(e) => handleCustomerCodeChange(e.target.value)}
-                placeholder="El código de 6 dígitos de tu cliente"
+                placeholder="El código de tu cliente"
                 className={inputClass}
               />
               {isResolvingCustomer && <p className="text-xs text-[#6b6d64]">Buscando...</p>}
@@ -1322,7 +1322,7 @@ export function BodegaOwnerPanel() {
                       step="0.5"
                       value={fiarAmountSoles}
                       onChange={(e) => setFiarAmountSoles(e.target.value)}
-                      className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                      className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                     />
                   </div>
                   <button onClick={handleFiar} disabled={isFiarSubmitting} className={primaryButtonClass} style={primaryButtonStyle}>
@@ -1356,7 +1356,7 @@ export function BodegaOwnerPanel() {
                   step="1"
                   value={escrowPrincipalSoles}
                   onChange={(e) => setEscrowPrincipalSoles(e.target.value)}
-                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -1368,7 +1368,7 @@ export function BodegaOwnerPanel() {
                   step="1"
                   value={escrowCollateralSoles}
                   onChange={(e) => setEscrowCollateralSoles(e.target.value)}
-                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -1380,7 +1380,7 @@ export function BodegaOwnerPanel() {
                   step="1"
                   value={escrowDueDays}
                   onChange={(e) => setEscrowDueDays(e.target.value)}
-                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                 />
               </div>
               <button onClick={handleProposeInvoice} disabled={isProposing} className={primaryButtonClass} style={primaryButtonStyle}>
@@ -1466,7 +1466,7 @@ export function BodegaOwnerPanel() {
                 step="1"
                 value={rewardCostPuntos}
                 onChange={(e) => setRewardCostPuntos(e.target.value)}
-                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -1480,7 +1480,7 @@ export function BodegaOwnerPanel() {
                 step="1"
                 value={rewardAvailableDays}
                 onChange={(e) => setRewardAvailableDays(e.target.value)}
-                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -1492,7 +1492,7 @@ export function BodegaOwnerPanel() {
                 step="1"
                 value={rewardClaimWindowHours}
                 onChange={(e) => setRewardClaimWindowHours(e.target.value)}
-                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
               />
             </div>
             <button onClick={handleCreateReward} disabled={isCreatingReward || !rewardTitle.trim()} className={primaryButtonClass} style={primaryButtonStyle}>
@@ -1587,7 +1587,7 @@ export function BodegaOwnerPanel() {
                 step="10"
                 value={groupOrderGoalSoles}
                 onChange={(e) => setGroupOrderGoalSoles(e.target.value)}
-                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -1599,7 +1599,7 @@ export function BodegaOwnerPanel() {
                 step="1"
                 value={groupOrderPledgeDays}
                 onChange={(e) => setGroupOrderPledgeDays(e.target.value)}
-                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -1611,7 +1611,7 @@ export function BodegaOwnerPanel() {
                 step="1"
                 value={groupOrderWithdrawDays}
                 onChange={(e) => setGroupOrderWithdrawDays(e.target.value)}
-                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
               />
             </div>
             <button
@@ -1679,7 +1679,7 @@ export function BodegaOwnerPanel() {
                           step="1"
                           value={pledgeSolesByOrder[o.id] ?? ""}
                           onChange={(e) => setPledgeSolesByOrder((prev) => ({ ...prev, [o.id]: e.target.value }))}
-                          className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                          className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                         />
                         <button
                           onClick={() => handlePledge(o.id)}
@@ -1802,7 +1802,7 @@ export function BodegaOwnerPanel() {
                   step="10"
                   value={borrowAmountSoles}
                   onChange={(e) => setBorrowAmountSoles(e.target.value)}
-                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                 />
               </div>
               <button onClick={handleBorrow} disabled={isBorrowing} className={outlineButtonClass}>
@@ -1871,7 +1871,7 @@ export function BodegaOwnerPanel() {
               inputMode="numeric"
               value={beneficiaryCodeInput}
               onChange={(e) => handleBeneficiaryCodeChange(e.target.value)}
-              placeholder="Su código de 6 dígitos"
+              placeholder="Su código"
               className={inputClass}
             />
             {isResolvingBeneficiary && <p className="text-xs text-[#6b6d64]">Buscando...</p>}
@@ -1888,7 +1888,7 @@ export function BodegaOwnerPanel() {
                     step="1"
                     value={issueAmountSoles}
                     onChange={(e) => setIssueAmountSoles(e.target.value)}
-                    className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                    className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                   />
                 </div>
                 <div className="flex items-center gap-2">
@@ -1900,7 +1900,7 @@ export function BodegaOwnerPanel() {
                     step="1"
                     value={issueDurationDays}
                     onChange={(e) => setIssueDurationDays(e.target.value)}
-                    className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-sm text-[#0a0a0b] outline-none focus:border-black/35"
+                    className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                   />
                 </div>
                 <button onClick={handleIssue} disabled={isIssuing} className={primaryButtonClass} style={primaryButtonStyle}>

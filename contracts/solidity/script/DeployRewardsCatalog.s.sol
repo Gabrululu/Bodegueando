@@ -18,12 +18,14 @@ import {RewardsCatalog, IBodegaRegistry} from "../src/RewardsCatalog.sol";
 contract DeployRewardsCatalog is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
         address paymentRouterAddress = vm.envAddress("PAYMENT_ROUTER_ADDRESS");
         address puntosTokenAddress = vm.envAddress("PUNTOS_TOKEN_ADDRESS");
 
         vm.startBroadcast(deployerKey);
 
-        RewardsCatalog catalog = new RewardsCatalog(IBodegaRegistry(paymentRouterAddress), IERC20(puntosTokenAddress));
+        RewardsCatalog catalog =
+            new RewardsCatalog(deployer, IBodegaRegistry(paymentRouterAddress), IERC20(puntosTokenAddress));
 
         vm.stopBroadcast();
 

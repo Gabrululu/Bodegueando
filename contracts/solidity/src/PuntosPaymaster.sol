@@ -7,16 +7,40 @@ import {BasePaymaster} from "account-abstraction/contracts/core/BasePaymaster.so
 import {IEntryPoint} from "account-abstraction/contracts/interfaces/IEntryPoint.sol";
 import {PackedUserOperation} from "account-abstraction/contracts/interfaces/PackedUserOperation.sol";
 
+/// @notice Minimal read-only view into PaymentRouter's bodega registry — same narrow
+/// interface InvoiceEscrow.sol/RewardsCatalog.sol/GroupOrders.sol/BeneficioToken.sol each
+/// declare locally.
+interface IBodegaRegistry {
+    function isBodega(address account) external view returns (bool);
+}
+
 /// @notice ERC-4337 paymaster that lets a Bodegueando smart account pay gas with its own
-/// PUNTOS (cashback) balance instead of holding native ETH. Every account's very first
-/// sponsored UserOperation is free (the app "gives" a new user their first bit of gas, same
-/// as topping up a fresh account); from the second one onward, the account must have
-/// approved this contract to spend PUNTOS, and each UserOperation's actual gas cost is
-/// pulled directly in PUNTOS.
+/// PUNTOS (cashback) balance instead of holding native ETH.
 ///
-/// No price oracle is needed for the PUNTOS<->ETH conversion: PaymentRouter mints PUNTOS in
-/// the exact same unit as the ETH payment it came from (`cashback = msg.value * cashbackBps /
-/// 10_000`, i.e. wei), so 1 wei of gas cost is charged as 1 wei of PUNTOS, 1:1, always.
+/// Two ways an account avoids paying PUNTOS for gas, checked in this order:
+///
+/// 1. It's a registered bodega (`bodegaRegistry.isBodega`) — ALWAYS sponsored, forever, no
+///    PUNTOS ever charged. A bodega only earns PUNTOS once (PaymentRouter's registration
+///    bootstrap mint) — it never gets ongoing cashback the way a buyer does (only the payer
+///    of receivePayment earns cashback), so making it pay its own gas from that one-time mint
+///    would eventually strand it. Bodegas also take gas-costing actions far less often than
+///    buyers make purchases (toggle fiado once, extend fiado occasionally, create a reward or
+///    group order now and then) — low volume, so sponsoring it outright is cheap in practice
+///    and matches the project's core promise ("Modelo de negocio" in the README): a bodega
+///    never pays anything for its own basic activity, full stop, no PUNTOS balance to manage
+///    or run out of.
+/// 2. It hasn't used up its first FREE_TRANSACTIONS sponsored UserOperations yet. With real
+///    purchase sizes, the cashback from one payment already covers the gas of the next one
+///    with comfortable margin (see ARCHITECTURE.md) — this multi-transaction runway exists
+///    for the cold-start case where an account's first few actions aren't purchases (paying
+///    back fiado, redeeming a reward — neither mints cashback), so nobody hits a gas wall in
+///    their first few steps, same as a normal payment app where "network fee" is never
+///    something the user has to think about.
+///
+/// After that, gas is pulled directly in PUNTOS, no price oracle needed for the PUNTOS<->ETH
+/// conversion: PaymentRouter mints PUNTOS in the exact same unit as the ETH payment it came
+/// from (`cashback = msg.value * cashbackBps / 10_000`, i.e. wei), so 1 wei of gas cost is
+/// charged as 1 wei of PUNTOS, 1:1, always.
 ///
 /// The contract itself must hold real ETH (deposited into the EntryPoint via the inherited
 /// `deposit()`/`addStake()` from BasePaymaster) to actually pay the bundler/network — PUNTOS
@@ -25,20 +49,43 @@ import {PackedUserOperation} from "account-abstraction/contracts/interfaces/Pack
 contract PuntosPaymaster is BasePaymaster {
     using SafeERC20 for IERC20;
 
+    enum ChargeMode {
+        SponsoredBodega,
+        FreeTransaction,
+        Chargeable
+    }
+
     IERC20 public immutable puntosToken;
 
-    /// @notice Whether an account has already used its one free sponsored UserOperation.
-    mapping(address => bool) public hasBootstrapped;
+    /// @notice NOT immutable, on purpose: PaymentRouter has already been redeployed several
+    /// times in this project's history (each one resets its isBodega registry), and
+    /// InvoiceEscrow/RewardsCatalog/GroupOrders/CreditLine all learned that lesson the hard
+    /// way by hardcoding this as immutable — a future PaymentRouter redeploy would silently
+    /// leave them recognizing only bodegas registered on the OLD router. This one can be
+    /// repointed with setBodegaRegistry instead of needing its own redeploy every time.
+    IBodegaRegistry public bodegaRegistry;
+
+    /// @notice How many sponsored UserOperations a non-bodega account gets free before gas
+    /// starts getting pulled from its PUNTOS balance.
+    uint256 public constant FREE_TRANSACTIONS = 5;
+
+    /// @notice How many of its free transactions an account has already used (successfully).
+    mapping(address => uint256) public freeTransactionsUsed;
 
     error InsufficientPuntosAllowance();
     error InsufficientPuntosBalance();
 
     event GasChargedInPuntos(address indexed account, uint256 amount);
-    event FreeBootstrapUsed(address indexed account);
+    event FreeTransactionUsed(address indexed account, uint256 remaining);
+    event GasSponsoredForBodega(address indexed bodega);
     event PuntosSwept(address indexed to, uint256 amount);
+    event BodegaRegistryUpdated(address indexed bodegaRegistry);
 
-    constructor(IEntryPoint _entryPoint, IERC20 _puntosToken, address _owner) BasePaymaster(_entryPoint) {
+    constructor(IEntryPoint _entryPoint, IERC20 _puntosToken, IBodegaRegistry _bodegaRegistry, address _owner)
+        BasePaymaster(_entryPoint)
+    {
         puntosToken = _puntosToken;
+        bodegaRegistry = _bodegaRegistry;
         _transferOwnership(_owner);
     }
 
@@ -50,29 +97,39 @@ contract PuntosPaymaster is BasePaymaster {
     {
         address account = userOp.sender;
 
-        if (!hasBootstrapped[account]) {
-            // First-ever sponsored operation for this account: free, no PUNTOS check.
-            return (abi.encode(account, false), 0);
+        if (bodegaRegistry.isBodega(account)) {
+            return (abi.encode(account, ChargeMode.SponsoredBodega), 0);
+        }
+
+        if (freeTransactionsUsed[account] < FREE_TRANSACTIONS) {
+            return (abi.encode(account, ChargeMode.FreeTransaction), 0);
         }
 
         if (puntosToken.allowance(account, address(this)) < maxCost) revert InsufficientPuntosAllowance();
         if (puntosToken.balanceOf(account) < maxCost) revert InsufficientPuntosBalance();
 
-        return (abi.encode(account, true), 0);
+        return (abi.encode(account, ChargeMode.Chargeable), 0);
     }
 
     function _postOp(PostOpMode mode, bytes calldata context, uint256 actualGasCost, uint256) internal override {
-        (address account, bool chargeable) = abi.decode(context, (address, bool));
+        (address account, ChargeMode chargeMode) = abi.decode(context, (address, ChargeMode));
 
-        if (!chargeable) {
-            // Only burn the one free bootstrap if the account's own call actually succeeded.
-            // If it reverted (wrong bodega code, insufficient funds, whatever), the account
-            // never got any real use out of its "free" transaction and never earned any
-            // PUNTOS from it either — marking it bootstrapped anyway would permanently lock
-            // that account out (no free tx left, 0 PUNTOS balance to pay for the next one).
+        if (chargeMode == ChargeMode.SponsoredBodega) {
+            // Nothing to track or charge — a bodega's gas is unconditionally on the house,
+            // every time, not just its first few transactions.
+            if (mode == PostOpMode.opSucceeded) emit GasSponsoredForBodega(account);
+            return;
+        }
+
+        if (chargeMode == ChargeMode.FreeTransaction) {
+            // Only burn a free transaction if the account's own call actually succeeded. If
+            // it reverted (wrong bodega code, insufficient funds, whatever), the account
+            // never got any real use out of it and never earned any PUNTOS from it either —
+            // counting it anyway would eat into runway it never benefited from.
             if (mode == PostOpMode.opSucceeded) {
-                hasBootstrapped[account] = true;
-                emit FreeBootstrapUsed(account);
+                uint256 used = freeTransactionsUsed[account] + 1;
+                freeTransactionsUsed[account] = used;
+                emit FreeTransactionUsed(account, FREE_TRANSACTIONS - used);
             }
             return;
         }
@@ -98,5 +155,12 @@ contract PuntosPaymaster is BasePaymaster {
     function sweepPuntos(address to, uint256 amount) external onlyOwner {
         puntosToken.safeTransfer(to, amount);
         emit PuntosSwept(to, amount);
+    }
+
+    /// @notice Repoints the bodega registry after a PaymentRouter redeploy — see the field's
+    /// doc for why this exists instead of being set once in the constructor.
+    function setBodegaRegistry(IBodegaRegistry _bodegaRegistry) external onlyOwner {
+        bodegaRegistry = _bodegaRegistry;
+        emit BodegaRegistryUpdated(address(_bodegaRegistry));
     }
 }

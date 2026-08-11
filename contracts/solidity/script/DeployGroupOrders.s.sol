@@ -16,11 +16,12 @@ import {GroupOrders, IBodegaRegistry} from "../src/GroupOrders.sol";
 contract DeployGroupOrders is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
         address paymentRouterAddress = vm.envAddress("PAYMENT_ROUTER_ADDRESS");
 
         vm.startBroadcast(deployerKey);
 
-        GroupOrders groupOrders = new GroupOrders(IBodegaRegistry(paymentRouterAddress));
+        GroupOrders groupOrders = new GroupOrders(deployer, IBodegaRegistry(paymentRouterAddress));
 
         vm.stopBroadcast();
 

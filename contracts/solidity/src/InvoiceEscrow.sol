@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IFiadoScoring} from "./interfaces/IFiadoScoring.sol";
 
 /// @notice Minimal read-only view into PaymentRouter's bodega registry — same narrow
@@ -30,7 +31,7 @@ interface IBodegaRegistry {
 /// checks-effects-interactions: invoice state is fully updated before any ETH leaves the
 /// contract or FiadoScoring is called, so a malicious bodega/customer contract can't reenter
 /// a still-"Active" invoice to double-claim.
-contract InvoiceEscrow {
+contract InvoiceEscrow is Ownable {
     enum Status {
         Proposed,
         Active,
@@ -49,7 +50,12 @@ contract InvoiceEscrow {
         Status status;
     }
 
-    IBodegaRegistry public immutable bodegaRegistry;
+    /// @notice NOT immutable, on purpose — see PuntosPaymaster.sol's identical field for why:
+    /// PaymentRouter has already been redeployed several times in this project (each reset
+    /// resets its isBodega registry), and this used to be hardcoded immutable here, which
+    /// would leave InvoiceEscrow silently blind to bodegas registered after the next
+    /// redeploy. setBodegaRegistry (owner-only) repoints it instead.
+    IBodegaRegistry public bodegaRegistry;
     IFiadoScoring public immutable fiadoScoring;
 
     uint256 public nextInvoiceId;
@@ -72,10 +78,17 @@ contract InvoiceEscrow {
     event InvoiceAccepted(uint256 indexed id, uint256 collateral);
     event InvoiceRepaid(uint256 indexed id, uint256 amount, bool fullyRepaid);
     event InvoiceDefaulted(uint256 indexed id, uint256 claimedByBodega, uint256 refundedToCustomer);
+    event BodegaRegistryUpdated(address indexed bodegaRegistry);
 
-    constructor(IBodegaRegistry _bodegaRegistry, IFiadoScoring _fiadoScoring) {
+    constructor(address initialOwner, IBodegaRegistry _bodegaRegistry, IFiadoScoring _fiadoScoring) Ownable(initialOwner) {
         bodegaRegistry = _bodegaRegistry;
         fiadoScoring = _fiadoScoring;
+    }
+
+    /// @notice Repoints the bodega registry after a PaymentRouter redeploy.
+    function setBodegaRegistry(IBodegaRegistry _bodegaRegistry) external onlyOwner {
+        bodegaRegistry = _bodegaRegistry;
+        emit BodegaRegistryUpdated(address(_bodegaRegistry));
     }
 
     /// @notice Bodega proposes a collateral-backed invoice for `customer`. No funds or debt

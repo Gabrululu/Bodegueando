@@ -250,14 +250,18 @@ con transacciones reales en Arbitrum Sepolia:
 
 ### Roadmap: lo que sigue
 
-Con esa capa ya construida, lo que queda pendiente depende de terceros, no de más ingeniería:
+Con esa capa ya construida, esto es lo que sigue:
 
-- **Notificaciones por WhatsApp**, junto a Telegram (que ya funciona hoy) — pendiente de
-  aprobación de permisos de Meta Business API.
+- **Notificaciones por WhatsApp**, junto a Telegram (que ya funciona hoy) — en camino,
+  próximas semanas.
 - **eSol real y rampas con soles de verdad.** Hoy el pago usa ETH de testnet como stand-in; el
-  camino a producción implica una rampa real entre soles y saldo dentro de la app (Yape,
-  efectivo) y un `ePEN` respaldado 1:1 por un emisor regulado — un problema de compliance y
-  rampas fiat, no de contrato.
+  plan es integrarse a un proveedor de conversión soles↔saldo on-chain ya autorizado para
+  operar en Perú (evaluado más adelante, sin comprometerse hoy a uno específico) — no emitir
+  una moneda propia, que es un problema de compliance y reservas de otra escala. El cashback no
+  cambia con esto: los puntos se acuñan aparte del monto pagado, nunca salen del bolsillo de
+  nadie, y el margen de la conversión se absorbe como costo de plataforma, con el mismo patrón
+  que ya usa `PuntosPaymaster` para esconder el costo del gas — el usuario sigue viendo un
+  monto en soles y un botón, nada más.
 
 *(Nota de diseño: la primera sección puede ser una grilla de tarjetas ya "con check" — cada
 una con su ícono y una transacción real de Arbiscan como prueba, reforzando "Prueba de que
@@ -266,15 +270,24 @@ trabajo por delante.)*
 
 ### El equipo
 
-Bodegueando lo construyó **una sola persona** durante las horas del hackathon: producto,
-contratos inteligentes (Solidity y Rust/Stylus), frontend, integración de IA y despliegue —
+> Detrás de Bodegueando, una bodeguera que también programa.
+
+**Jennifer Gabriela** — Ingeniera de producto, con base en Web3.
+
+Con experiencia en desarrollo Web3 y una bodega propia desde hace más de cinco años — entiende
+el fiado desde los dos lados del mostrador, y eso está en cada decisión de producto de
+Bodegueando.
+
+Lo construyó **una sola persona** durante las horas del hackathon: producto, contratos
+inteligentes (Solidity y Rust/Stylus), circuito ZK, frontend, integración de IA y despliegue —
 de punta a punta. No hay una división de roles que mostrar porque no hizo falta: cada pieza
 del sistema, del contrato de fiado al bot de Telegram, salió de la misma persona en el mismo
 sprint.
 
-*(Nota de diseño: si el formato de la presentación pide "roles", esta slide puede mostrarse
-como una sola tarjeta con el nombre y la lista de disciplinas cubiertas, en vez de una grilla
-de varias personas.)*
+*(Nota de diseño: tarjeta única, no grilla — foto o silueta, el nombre en Bricolage, el título
+"Ingeniera de producto — con base en Web3" debajo, y la frase de gancho ("una bodeguera que
+también programa") en Instrument Serif cursiva, como acento editorial, igual que se usa en el
+resto del pitch.)*
 
 ### Cierre
 

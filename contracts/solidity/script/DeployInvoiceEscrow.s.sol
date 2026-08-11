@@ -18,12 +18,14 @@ import {IFiadoScoring} from "../src/interfaces/IFiadoScoring.sol";
 contract DeployInvoiceEscrow is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
         address paymentRouterAddress = vm.envAddress("PAYMENT_ROUTER_ADDRESS");
         address fiadoScoringAddress = vm.envAddress("FIADO_SCORING_ADDRESS");
 
         vm.startBroadcast(deployerKey);
 
-        InvoiceEscrow escrow = new InvoiceEscrow(IBodegaRegistry(paymentRouterAddress), IFiadoScoring(fiadoScoringAddress));
+        InvoiceEscrow escrow =
+            new InvoiceEscrow(deployer, IBodegaRegistry(paymentRouterAddress), IFiadoScoring(fiadoScoringAddress));
 
         vm.stopBroadcast();
 

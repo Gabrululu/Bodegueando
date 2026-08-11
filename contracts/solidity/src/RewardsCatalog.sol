@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @notice Minimal read-only view into PaymentRouter's bodega registry — same narrow
 /// interface BeneficioToken.sol/InvoiceEscrow.sol each declare locally, so RewardsCatalog
@@ -31,7 +32,7 @@ interface IBodegaRegistry {
 /// El sorteo usa `blockhash`/`timestamp` como fuente de aleatoriedad on-chain — manipulable
 /// en un grado limitado por quien propone el bloque, pero razonable para un sorteo de bajo
 /// valor entre vecinos; no amerita la complejidad de un oráculo VRF externo.
-contract RewardsCatalog {
+contract RewardsCatalog is Ownable {
     enum RewardKind {
         Instant,
         Raffle
@@ -57,7 +58,8 @@ contract RewardsCatalog {
         bool fulfilled;
     }
 
-    IBodegaRegistry public immutable bodegaRegistry;
+    /// @notice NOT immutable, on purpose — see PuntosPaymaster.sol's identical field for why.
+    IBodegaRegistry public bodegaRegistry;
     IERC20 public immutable puntosToken;
 
     uint256 public nextRewardId;
@@ -94,10 +96,17 @@ contract RewardsCatalog {
     event RaffleEntered(uint256 indexed rewardId, address indexed customer, uint256 totalEntries);
     event RaffleDrawn(uint256 indexed rewardId, address indexed winner, uint256 indexed redemptionId);
     event RedemptionFulfilled(uint256 indexed redemptionId, uint256 code);
+    event BodegaRegistryUpdated(address indexed bodegaRegistry);
 
-    constructor(IBodegaRegistry _bodegaRegistry, IERC20 _puntosToken) {
+    constructor(address initialOwner, IBodegaRegistry _bodegaRegistry, IERC20 _puntosToken) Ownable(initialOwner) {
         bodegaRegistry = _bodegaRegistry;
         puntosToken = _puntosToken;
+    }
+
+    /// @notice Repoints the bodega registry after a PaymentRouter redeploy.
+    function setBodegaRegistry(IBodegaRegistry _bodegaRegistry) external onlyOwner {
+        bodegaRegistry = _bodegaRegistry;
+        emit BodegaRegistryUpdated(address(_bodegaRegistry));
     }
 
     /// @notice Bodega registrada crea un beneficio propio. No mueve fondos: los PUNTOS solo

@@ -88,17 +88,23 @@ contract PaymentRouterTest is Test {
     function test_OnlyOwnerCanSetCashbackBps() public {
         vm.prank(payer);
         vm.expectRevert();
-        router.setCashbackBps(500);
+        router.setCashbackBps(250);
 
         vm.prank(owner);
-        router.setCashbackBps(500);
-        assertEq(router.cashbackBps(), 500);
+        router.setCashbackBps(250);
+        assertEq(router.cashbackBps(), 250);
+    }
+
+    function test_CashbackBpsAcceptsExactCap() public {
+        vm.prank(owner);
+        router.setCashbackBps(300);
+        assertEq(router.cashbackBps(), 300);
     }
 
     function test_RevertWhen_CashbackTooHigh() public {
         vm.prank(owner);
         vm.expectRevert(PaymentRouter.CashbackTooHigh.selector);
-        router.setCashbackBps(1_001);
+        router.setCashbackBps(301);
     }
 
     function test_PayFiado_TransfersFundsAndRecordsRepaymentWithoutCashback() public {

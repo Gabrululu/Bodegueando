@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
 /// @notice Minimal read-only view into PaymentRouter's bodega registry — same narrow
 /// interface BeneficioToken.sol/InvoiceEscrow.sol/RewardsCatalog.sol each declare locally.
 interface IBodegaRegistry {
@@ -28,7 +30,7 @@ interface IBodegaRegistry {
 /// nunca retira dentro de `withdrawWindowSeconds` después del cierre de aportes, cualquier
 /// bodega que aportó puede reclamar su parte de vuelta — el fondo nunca queda atrapado para
 /// siempre.
-contract GroupOrders {
+contract GroupOrders is Ownable {
     struct GroupOrder {
         address organizer;
         string title;
@@ -39,7 +41,8 @@ contract GroupOrders {
         bool withdrawn;
     }
 
-    IBodegaRegistry public immutable bodegaRegistry;
+    /// @notice NOT immutable, on purpose — see PuntosPaymaster.sol's identical field for why.
+    IBodegaRegistry public bodegaRegistry;
 
     uint256 public nextGroupOrderId;
     mapping(uint256 => GroupOrder) public groupOrders;
@@ -64,9 +67,16 @@ contract GroupOrders {
     event Pledged(uint256 indexed id, address indexed bodega, uint256 amount, uint256 totalPledged);
     event Withdrawn(uint256 indexed id, address indexed organizer, uint256 amount);
     event Refunded(uint256 indexed id, address indexed bodega, uint256 amount);
+    event BodegaRegistryUpdated(address indexed bodegaRegistry);
 
-    constructor(IBodegaRegistry _bodegaRegistry) {
+    constructor(address initialOwner, IBodegaRegistry _bodegaRegistry) Ownable(initialOwner) {
         bodegaRegistry = _bodegaRegistry;
+    }
+
+    /// @notice Repoints the bodega registry after a PaymentRouter redeploy.
+    function setBodegaRegistry(IBodegaRegistry _bodegaRegistry) external onlyOwner {
+        bodegaRegistry = _bodegaRegistry;
+        emit BodegaRegistryUpdated(address(_bodegaRegistry));
     }
 
     /// @notice Bodega registrada organiza un pedido grupal. `goal` es el mínimo en ETH a

@@ -15,12 +15,14 @@ import {CreditLine, IBodegaRegistry, ICreditCertificate} from "../src/CreditLine
 contract DeployCreditLine is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
         address paymentRouterAddress = vm.envAddress("PAYMENT_ROUTER_ADDRESS");
         address creditCertificateAddress = vm.envAddress("CREDIT_CERTIFICATE_ADDRESS");
 
         vm.startBroadcast(deployerKey);
 
-        CreditLine creditLine = new CreditLine(IBodegaRegistry(paymentRouterAddress), ICreditCertificate(creditCertificateAddress));
+        CreditLine creditLine =
+            new CreditLine(deployer, IBodegaRegistry(paymentRouterAddress), ICreditCertificate(creditCertificateAddress));
 
         vm.stopBroadcast();
 

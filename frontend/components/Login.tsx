@@ -29,7 +29,7 @@ export function Login() {
   return (
     <button
       onClick={() => login()}
-      className="cursor-pointer rounded-full px-5 py-2.5 text-sm font-semibold text-[#0a0a0b] transition-transform hover:-translate-y-0.5"
+      className="inline-flex min-h-11 cursor-pointer items-center justify-center rounded-full px-5 py-2.5 text-sm font-semibold text-[#0a0a0b] transition-transform hover:-translate-y-0.5"
       style={{
         background: "linear-gradient(180deg, #d6f17b 0%, #c9e265 100%)",
         boxShadow: "inset 0 1px #ffffff75, 0 8px 20px #6e841b38",

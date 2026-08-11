@@ -20,6 +20,7 @@ contract RewardsCatalogTest is Test {
     MockBodegaRegistry registry;
     PuntosToken puntos;
 
+    address owner = makeAddr("owner");
     address minter = makeAddr("minter");
     address bodega = makeAddr("bodega");
     address customer = makeAddr("customer");
@@ -35,7 +36,7 @@ contract RewardsCatalogTest is Test {
         puntos = new PuntosToken(address(this));
         puntos.setMinter(minter);
 
-        catalog = new RewardsCatalog(registry, puntos);
+        catalog = new RewardsCatalog(owner, registry, puntos);
 
         vm.prank(minter);
         puntos.mint(customer, 1000 ether);
@@ -320,5 +321,17 @@ contract RewardsCatalogTest is Test {
         vm.prank(customer2);
         vm.expectRevert(RewardsCatalog.RewardExpired.selector);
         catalog.enterRaffle(id);
+    }
+
+    function test_SetBodegaRegistry_OnlyOwner() public {
+        MockBodegaRegistry newRegistry = new MockBodegaRegistry();
+
+        vm.prank(randomWallet);
+        vm.expectRevert();
+        catalog.setBodegaRegistry(newRegistry);
+
+        vm.prank(owner);
+        catalog.setBodegaRegistry(newRegistry);
+        assertEq(address(catalog.bodegaRegistry()), address(newRegistry));
     }
 }

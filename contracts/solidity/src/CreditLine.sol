@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
 /// @notice Minimal read-only view into PaymentRouter's bodega registry — same narrow
 /// interface BeneficioToken.sol/InvoiceEscrow.sol/RewardsCatalog.sol/GroupOrders.sol each
 /// declare locally.
@@ -25,7 +27,7 @@ interface ICreditCertificate {
 /// certificados nuevos mientras haya un default sin resolver) vive en
 /// frontend/app/api/credit-certificate/attest/route.ts, no acá, para no tener que acoplar
 /// este contrato a CreditCertificate más que en la sola lectura de `getCertifiedThreshold`.
-contract CreditLine {
+contract CreditLine is Ownable {
     struct Tier {
         uint256 minThreshold;
         uint256 collateralBps;
@@ -40,7 +42,8 @@ contract CreditLine {
         bool resolved;
     }
 
-    IBodegaRegistry public immutable bodegaRegistry;
+    /// @notice NOT immutable, on purpose — see PuntosPaymaster.sol's identical field for why.
+    IBodegaRegistry public bodegaRegistry;
     ICreditCertificate public immutable creditCertificate;
 
     uint256 public constant INTEREST_BPS = 500; // 5% flat por préstamo
@@ -76,14 +79,23 @@ contract CreditLine {
     event Borrowed(uint256 indexed loanId, address indexed bodega, uint256 principal, uint256 collateral, uint256 collateralBps);
     event Repaid(uint256 indexed loanId, uint256 amount);
     event Liquidated(uint256 indexed loanId, uint256 collateralSeized);
+    event BodegaRegistryUpdated(address indexed bodegaRegistry);
 
-    constructor(IBodegaRegistry _bodegaRegistry, ICreditCertificate _creditCertificate) {
+    constructor(address initialOwner, IBodegaRegistry _bodegaRegistry, ICreditCertificate _creditCertificate)
+        Ownable(initialOwner)
+    {
         bodegaRegistry = _bodegaRegistry;
         creditCertificate = _creditCertificate;
 
         tiers.push(Tier({minThreshold: 900, collateralBps: 1_500})); // 15%
         tiers.push(Tier({minThreshold: 700, collateralBps: 3_000})); // 30%
         tiers.push(Tier({minThreshold: 500, collateralBps: 5_000})); // 50%
+    }
+
+    /// @notice Repoints the bodega registry after a PaymentRouter redeploy.
+    function setBodegaRegistry(IBodegaRegistry _bodegaRegistry) external onlyOwner {
+        bodegaRegistry = _bodegaRegistry;
+        emit BodegaRegistryUpdated(address(_bodegaRegistry));
     }
 
     /// @notice Cualquiera aporta ETH al pool compartido, a cambio de shares proporcionales

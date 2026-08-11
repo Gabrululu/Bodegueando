@@ -18,6 +18,7 @@ contract GroupOrdersTest is Test {
     GroupOrders orders;
     MockBodegaRegistry registry;
 
+    address owner = makeAddr("owner");
     address organizer = makeAddr("organizer");
     address contributor1 = makeAddr("contributor1");
     address contributor2 = makeAddr("contributor2");
@@ -32,7 +33,7 @@ contract GroupOrdersTest is Test {
         registry.setBodega(contributor1, true);
         registry.setBodega(contributor2, true);
 
-        orders = new GroupOrders(registry);
+        orders = new GroupOrders(owner, registry);
 
         vm.deal(organizer, 10 ether);
         vm.deal(contributor1, 10 ether);
@@ -277,5 +278,17 @@ contract GroupOrdersTest is Test {
         vm.prank(randomWallet);
         vm.expectRevert(GroupOrders.NothingToRefund.selector);
         orders.refund(id);
+    }
+
+    function test_SetBodegaRegistry_OnlyOwner() public {
+        MockBodegaRegistry newRegistry = new MockBodegaRegistry();
+
+        vm.prank(randomWallet);
+        vm.expectRevert();
+        orders.setBodegaRegistry(newRegistry);
+
+        vm.prank(owner);
+        orders.setBodegaRegistry(newRegistry);
+        assertEq(address(orders.bodegaRegistry()), address(newRegistry));
     }
 }

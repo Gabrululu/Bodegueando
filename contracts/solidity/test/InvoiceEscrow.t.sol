@@ -20,6 +20,7 @@ contract InvoiceEscrowTest is Test {
     MockBodegaRegistry registry;
     MockFiadoScoring fiadoScoring;
 
+    address owner = makeAddr("owner");
     address bodega = makeAddr("bodega");
     address customer = makeAddr("customer");
     address randomWallet = makeAddr("randomWallet");
@@ -33,7 +34,7 @@ contract InvoiceEscrowTest is Test {
 
         fiadoScoring = new MockFiadoScoring();
 
-        escrow = new InvoiceEscrow(registry, fiadoScoring);
+        escrow = new InvoiceEscrow(owner, registry, fiadoScoring);
         fiadoScoring.setEscrow(address(escrow));
 
         vm.deal(customer, 10 ether);
@@ -231,5 +232,17 @@ contract InvoiceEscrowTest is Test {
         vm.prank(bodega);
         vm.expectRevert(InvoiceEscrow.InvalidState.selector);
         escrow.claimCollateral(id);
+    }
+
+    function test_SetBodegaRegistry_OnlyOwner() public {
+        MockBodegaRegistry newRegistry = new MockBodegaRegistry();
+
+        vm.prank(randomWallet);
+        vm.expectRevert();
+        escrow.setBodegaRegistry(newRegistry);
+
+        vm.prank(owner);
+        escrow.setBodegaRegistry(newRegistry);
+        assertEq(address(escrow.bodegaRegistry()), address(newRegistry));
     }
 }

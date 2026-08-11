@@ -38,15 +38,15 @@ bodegueando/
 |---|---|---|
 | **FiadoScoring** (Stylus/Rust) | `0x22FD7ED957b356dcF4a93574D24fC724736480B2` | [ver / verificado](https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
-| **PaymentRouter** | `0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2e9F0b5Fd0f011B2e72950De9F4404F3295b76bd#code) |
-| **PuntosPaymaster** | `0x138572e9A1c858D2759e60f46586D36e974FBcEd` | [ver código verificado](https://sepolia.arbiscan.io/address/0x138572e9A1c858D2759e60f46586D36e974FBcEd#code) |
+| **PaymentRouter** | `0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F` | [ver código verificado](https://sepolia.arbiscan.io/address/0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F#code) |
+| **PuntosPaymaster** | `0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403` | [ver código verificado](https://sepolia.arbiscan.io/address/0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403#code) |
 | **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
-| **InvoiceEscrow** (fiado con garantía parcial) | `0x8fe870ac497708E8a123e8083f3AF32cf5b6C645` | [ver código verificado](https://sepolia.arbiscan.io/address/0x8fe870ac497708E8a123e8083f3AF32cf5b6C645#code) |
-| **RewardsCatalog** (catálogo de beneficios) | `0x6151F3CD52680E0e31bBc75c763414E8d8c70b97` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6151F3CD52680E0e31bBc75c763414E8d8c70b97#code) |
-| **GroupOrders** (compras conjuntas entre bodegas) | `0xC765E6Dd487DD03BEEcf81dF1dE6d051Fa35fcf8` | [ver código verificado](https://sepolia.arbiscan.io/address/0xC765E6Dd487DD03BEEcf81dF1dE6d051Fa35fcf8#code) |
+| **InvoiceEscrow** (fiado con garantía parcial) | `0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4` | [ver código verificado](https://sepolia.arbiscan.io/address/0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4#code) |
+| **RewardsCatalog** (catálogo de beneficios) | `0x0c07b1b63aAbAD36d15877D80f10411534C44a2f` | [ver código verificado](https://sepolia.arbiscan.io/address/0x0c07b1b63aAbAD36d15877D80f10411534C44a2f#code) |
+| **GroupOrders** (compras conjuntas entre bodegas) | `0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0` | [ver código verificado](https://sepolia.arbiscan.io/address/0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0#code) |
 | **CreditCertificate** | `0xc42547586FbEfCA3D8EA189B1e87a2c234f67828` | [ver código verificado](https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code) |
 | **Groth16Verifier** (verificador ZK, autogenerado) | `0x6a61e780f9a811eA28718146A9B2F720C19359fb` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code) |
-| **CreditLine** | `0x3BE8E82DECDCf04f4AEE5dc0507eb9EdC24A4Ba9` | [ver código verificado](https://sepolia.arbiscan.io/address/0x3BE8E82DECDCf04f4AEE5dc0507eb9EdC24A4Ba9#code) |
+| **CreditLine** | `0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29` | [ver código verificado](https://sepolia.arbiscan.io/address/0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29#code) |
 
 `FiadoScoring` y `PaymentRouter` fueron redesplegados el 2026-08-08 para incluir el ledger de
 fiado (`extendFiado`/`repayFiado`/`payFiado`, ver más abajo). `PuntosToken` y `PuntosPaymaster`
@@ -92,6 +92,25 @@ reconectó a la instancia nueva con `setFiadoScoring` (sin redesplegarse), y el 
 volvió a autorizar con la misma cuenta de siempre. `InvoiceEscrow` se desplegó por primera vez
 apuntando a este `FiadoScoring` nuevo y al `PaymentRouter` existente (como `IBodegaRegistry`,
 mismo patrón que `BeneficioToken`), y quedó autorizado en `FiadoScoring.setEscrow`.
+
+`PaymentRouter` se redesplegó una cuarta vez el 2026-08-10 para bajar el techo duro de
+`cashbackBps` de 10% a 3% (`setCashbackBps`, ver "Modelo de negocio" en el README) — el
+default operativo sigue en 2%, esto solo baja el máximo que un owner podría llegar a fijar.
+`PuntosPaymaster` se redesplegó junto con él para dos cambios de diseño (no bugs): patrocinar
+cualquier acción de una bodega registrada sin cobrar PUNTOS nunca, y extender la única
+transacción gratis a las primeras cinco — ver "Login sin wallet..." más abajo para el detalle
+completo y la corrida en vivo. `InvoiceEscrow`, `RewardsCatalog`, `GroupOrders` y `CreditLine`
+también se redesplegaron ese mismo día, no por su propia lógica de negocio (sin cambios ahí),
+sino para arreglar un problema estructural que este mismo redeploy de `PaymentRouter` iba a
+exponer: los cuatro guardaban su `bodegaRegistry` como `immutable`, así que habrían quedado
+apuntando para siempre al `PaymentRouter` viejo, sin reconocer ninguna bodega que se registrara
+después en el nuevo. Los cuatro pasaron a `Ownable` con `bodegaRegistry` actualizable
+(`setBodegaRegistry`, mismo patrón que ya tenía `BeneficioToken`) — mismo fix que se le aplicó
+a `PuntosPaymaster` de entrada, para no repetir este problema la próxima vez que
+`PaymentRouter` se redespliegue. `FiadoScoring.setPaymentRouter` y `FiadoScoring.setEscrow` se
+reconectaron a las instancias nuevas; `BeneficioToken.setBodegaRegistry` quedó pendiente de un
+clic en el panel de administrador (su `owner` no es la cuenta deployer, igual que en el
+redeploy anterior).
 
 `PuntosToken`, `PaymentRouter`, `PuntosPaymaster` y `BeneficioToken` están verificados con código fuente Solidity legible en
 Arbiscan (`forge verify-contract`). `FiadoScoring` está verificado con
@@ -858,6 +877,86 @@ entrar por teléfono/correo → elegir explícitamente "Soy bodeguero" (dispara 
 sin popup de wallet, se siente instantáneo) → pasar a la vista de bodeguero, con un QR nuevo
 para cobrar (ver siguiente sección) — confirmado en vivo.
 
+### Gas sin fricción: más margen para el comprador, gas gratis para la bodega, techo de cashback realista (probado en vivo)
+
+Con solo una transacción gratis y después cobrando gas en PUNTOS, dos preguntas quedaban sin
+resolver del todo: ¿el cashback de una compra real alcanza para pagar el gas de la siguiente?,
+y ¿tiene sentido que una bodega dependa de un saldo de puntos para pagar sus propias acciones,
+si nunca gana cashback por cobrar (el cashback es del comprador, no de quien recibe el pago)?
+
+**El número real, no una suposición.** Con el tipo de cambio que ya usa la app
+(`lib/exchangeRate.ts`, ~S/6500 por ETH) y los tickets típicos del proyecto (S/5–S/20 ≈
+0.00077–0.00308 ETH), el 2% de cashback por defecto genera entre 1.9x y 3.85x el gas real de
+una transacción en Arbitrum Sepolia (~0.0000039 ETH medido en una transacción real ya
+ejecutada) — un margen cómodo. El caso ajustado que sí existía era con montos de prueba
+mucho más chicos que un ticket real (ej. 0.0002 ETH ≈ S/1.30, usados en pruebas anteriores de
+esta sesión), no con el uso real del producto.
+
+**Fase A — de 1 a 5 transacciones gratis por cuenta.** `hasBootstrapped` (un booleano) pasó a
+`freeTransactionsUsed` (un contador) contra `FREE_TRANSACTIONS = 5`. Le da runway de sobra a
+una cuenta nueva cuya segunda o tercera acción no sea necesariamente una compra (pagar fiado,
+canjear un beneficio — ninguna de las dos genera cashback), sin que nadie se tope con un error
+de gas en sus primeros pasos, algo que en Yape/Plin/efectivo simplemente no existe como
+concepto.
+
+**Fase B2 — una bodega nunca paga gas, nunca.** `PuntosPaymaster._validatePaymasterUserOp`
+ahora consulta `PaymentRouter.isBodega(cuenta)` primero: si es una bodega registrada, la
+patrocina siempre, sin mirar su saldo de PUNTOS ni consumir su runway de transacciones
+gratis. Es la decisión de diseño, no un parche — encaja con "Modelo de negocio" (nunca
+cobrarle a la bodega por su actividad básica): una bodega hace muchas menos acciones de gas
+que compras recibe un comprador (activar fiado es una vez, fiarle a un cliente es ocasional),
+así que patrocinarla del todo es barato y le ahorra al bodeguero tener que entender "mi saldo
+de puntos para pagar mis propias acciones".
+
+Esto también expuso un problema estructural en otros cuatro contratos: `InvoiceEscrow`,
+`RewardsCatalog`, `GroupOrders` y `CreditLine` guardaban su `bodegaRegistry` como `immutable`
+— apuntando para siempre al `PaymentRouter` con el que se desplegaron. Como `PaymentRouter` ya
+se había redesplegado varias veces antes (y se iba a redesplegar una vez más para la Fase C),
+esos cuatro contratos habrían quedado ciegos a cualquier bodega que se registrara después del
+redeploy. Se les agregó `Ownable` + `setBodegaRegistry` (mismo patrón que ya tenía
+`BeneficioToken`, y que `PuntosPaymaster` adoptó de entrada para no repetir el problema) — ver
+"Contratos desplegados" arriba para el detalle completo del redeploy en cascada.
+
+**Fase C — techo de `cashbackBps` de 10% a 3%.** El 10% original no tenía ningún anclaje real
+— nunca se usó (el default sigue en 2%) — y si `PUNTOS` algún día se respalda 1:1 con soles
+reales (roadmap: ePEN), ese mismo 10% pasaría de ser contable a ser un descuento real sobre la
+venta de una bodega, peor que el 2.5%–3.5% de un POS tradicional. El nuevo techo (3%) deja un
+punto de margen sobre el default y se queda muy por debajo de cualquier comisión de POS,
+incluso en un futuro con `PUNTOS` respaldado.
+
+**Corrida real de punta a punta contra los contratos nuevos** (script standalone con
+`permissionless.js` + Pimlico, dos smart accounts descartables — una bodega, un comprador):
+
+1. La bodega manda `registerSelf()` y tres acciones más (`setFiadoEnabled`, alternando
+   on/off). Las cuatro se confirman on-chain (ej.
+   [tx `0x4f98219b...`](https://sepolia.arbiscan.io/tx/0x4f98219bf28093cd8354a55d5bf896d186bc0993f4be2a37b5ac0cade1749e8b)),
+   y su saldo de PUNTOS se queda clavado en `0.005` (el mint de bienvenida) en las cuatro —
+   nunca se le cobró nada, ni siquiera después de agotar lo que hubieran sido sus 5
+   transacciones gratis bajo las reglas de un comprador.
+2. El comprador hace 5 pagos chicos a esa bodega
+   (ej. [tx `0x235925b4...`](https://sepolia.arbiscan.io/tx/0x235925b41af3930d7c6938cc3330d4154126dfe5b5abec151c71b8d64441a90c)):
+   `freeTransactionsUsed` sube de 0 a 5 exactamente, ninguno de los 5 cobra PUNTOS, y su saldo
+   de cashback acumulado queda en `0.000002 ETH` — exactamente 2% × 5 × 0.00002 ETH, la
+   aritmética cuadra al centavo.
+3. Con las 5 gratis agotadas, un sexto intento sin PUNTOS aprobados revierte con
+   `InsufficientPuntosAllowance` — el comportamiento correcto, no un bug: confirma que el
+   límite se hace cumplir de verdad.
+4. Como owner, `setCashbackBps(301)` revierte con `CashbackTooHigh`
+   ([tx revertida confirmada por simulación](https://sepolia.arbiscan.io/address/0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F)),
+   `setCashbackBps(300)` (el techo exacto) sí funciona
+   ([tx `0x3645e96c...`](https://sepolia.arbiscan.io/tx/0x3645e96c021e7ecc5254541d285da75695c4875a94a9ac17f36b18da18a6c059)),
+   y se restauró a `200` (2%, el default operativo) inmediatamente después
+   ([tx `0x055b3ae4...`](https://sepolia.arbiscan.io/tx/0x055b3ae4c8f878a93ba695540346c12aa42633420a9fac5c31d4ba52efc72a07)).
+
+El camino de "cobrar PUNTOS de verdad una vez que hay allowance" (paso 6 charged) es lógica
+que no cambió en este redeploy — ya estaba cubierta por
+`test_ChargesPuntosOnceFreeTransactionsAreUsed` (Foundry, con un `EntryPoint` real desplegado
+en el test, no mockeado) y ya se había probado en vivo en una sesión anterior antes de este
+cambio; esta corrida se enfocó en lo que sí es nuevo: el runway de 5 transacciones y el
+patrocinio incondicional a bodegas.
+
+118/118 tests en todo el repo (Rust + Solidity + circuito) con este cambio.
+
 ### Bodeguero y cliente son dos espacios separados, nunca combinados
 
 `app/app/page.tsx` no infiere el rol combinándolo con la vista del otro: una cuenta ya
@@ -895,6 +994,57 @@ directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y preca
 `BuyerPanel`) o escribe el código a mano como respaldo. Ninguno de los dos paneles muestra un
 `0x...` en ningún lado.
 
+**Dos pools independientes, almacenamiento atómico, largo adaptativo.** El mismo código de 6
+dígitos también se usa para el código personal de un comprador (para que una bodega le fíe, o
+reciba un beneficio social) — dos poblaciones con perfiles de crecimiento muy distintos
+compartiendo un solo espacio de 900,000 combinaciones (6 dígitos, sin el 0 inicial) garantizaba
+agotarlo apenas la base de compradores creciera más allá de eso. `lib/bodegaCodes.ts` separa
+ambos en pools independientes (`"bodega"`/`"buyer"`, claves `code:<pool>:code:<código>` y
+`code:<pool>:addr:<dirección>`), cada uno con su propio margen — las bodegas están acotadas
+(~500-600 mil en el Perú), los compradores no.
+
+La reserva de un código nuevo dejó de ser "leer todo el store, revisar colisión en memoria,
+reescribir todo el store" (`lib/kv.ts`, `readJsonStore`/`writeJsonStore` — el patrón que sigue
+usando el resto de los stores chicos, como `bodegaLocations.ts`/`telegram.ts`) para pasar a
+primitivas atómicas por-clave (`setIfNotExists`, `getValue`, `deleteKey`, `incrementCounter`):
+`SETNX`/`GET`/`DEL`/`INCR` reales en Redis (Upstash), y un mutex en proceso en el fallback de
+archivo local. El motivo no era solo el largo de 6 dígitos — el patrón de blob completo tenía
+una condición de carrera real con solo dos registros concurrentes (ambos leen el store antes de
+que el otro escriba; el segundo `write` borra silenciosamente lo que acababa de guardar el
+primero), sin depender de cuántos códigos hubiera emitidos.
+
+`getOrCreateCode(pool, address)` reserva el código primero (`SETNX`) y recién después reclama
+la dirección (`SETNX` de nuevo) — si dos requests concurrentes chocan por la misma dirección,
+quien pierde libera (`DEL`) el código que reservó de más y devuelve el que ya ganó, en vez de
+dejarlo huérfano para siempre. Los códigos se generan con `crypto.randomInt` (Fase 3 del
+diseño), no `Math.random` — el código no es un secreto de seguridad (la autorización real la
+hace la firma de la smart account, esto es solo un puntero de UX), pero usar el generador
+criptográfico no cuesta nada y cierra cualquier duda futura sobre predictibilidad.
+
+**Largo adaptativo por pool.** Arranca en 6 dígitos (900,000 códigos). Un contador atómico por
+pool (`code:<pool>:count`, incrementado una sola vez por dirección nueva realmente registrada,
+nunca en cada intento) decide el largo de emisión: al llegar al 80% de la capacidad del largo
+actual, los códigos NUEVOS de ese pool pasan a emitirse un dígito más — mismo patrón que un
+número telefónico agregando un dígito cuando un código de área se llena. Los códigos ya
+emitidos siguen resolviendo para siempre, nunca se renumeran ni se acortan: resolver un código
+es un lookup por clave, no le importa cuántos dígitos tenga (los inputs del frontend aceptan
+6-9 dígitos, `/^\d{6,9}$/`, en vez de asumir exactamente 6).
+
+**Migración de datos reales.** Antes de este cambio, seis códigos ya estaban asignados en el
+Upstash de producción bajo el esquema viejo (un solo blob, sin distinguir bodega de
+comprador). `scripts/migrate-bodega-codes.mjs` los movió al esquema nuevo, clasificando cada
+dirección con `PaymentRouter.isBodega` on-chain (la misma fuente de verdad que ya usa el resto
+de la app). Corrida en vivo contra el `PaymentRouter` actual: las 6 direcciones cayeron en el
+pool `buyer` — incluida la cuenta deployer (la "bodega de prueba de siempre" de las corridas de
+arriba), porque el registro de bodegas vive en el propio `PaymentRouter` y no sobrevive un
+redeploy (`registerSelf` hay que repetirlo en cada contrato nuevo). Esa cuenta se volvió a
+registrar aparte (`registerSelf`,
+[tx `0xe72d69...`](https://sepolia.arbiscan.io/tx/0xe72d69867fb1ce5984b7e330054880205e0df4d37f3d78e87f5ebef8b8251451)) —
+si se corriera la migración de nuevo después de eso clasificaría esa dirección como `bodega`,
+pero el pool de un código ya asignado no se reclasifica retroactivamente (el mismo código sigue
+resolviendo igual desde cualquier pool, así que no hace falta). El blob viejo
+(`"bodega-codes"`) se dejó intacto como respaldo inerte; nada lo vuelve a leer.
+
 ### Mapa de bodegas cercanas ([mapcn.dev](https://www.mapcn.dev))
 
 `GroupOrders` y `RewardsCatalog` habían quedado documentados como listas globales, no
@@ -929,7 +1079,7 @@ shadcn/ui (`pnpm dlx shadcn@latest add @mapcn/map`, que a su vez necesitó
   (`lib/distance.ts`, Haversine) porque ahí "cerca" decide qué se muestra primero, no solo qué
   se ve en un mapa — ver "GroupOrders" más arriba.
 
-**Dos problemas reales encontrados y arreglados al instalar mapcn, no simulados:**
+**Tres problemas reales encontrados y arreglados al instalar mapcn, no simulados:**
 `shadcn@latest init` pisó la paleta propia de la app (`--background`/`--foreground` pasaron a
 blanco/negro genérico de shadcn) y rompió `--font-sans` (quedó autorreferenciado en vez de
 apuntar a `--font-geist-sans`) — se corrigió a mano en `app/globals.css`, dejando el resto del
@@ -938,11 +1088,50 @@ que genera el registro de mapcn importa un *default export* de `maplibre-gl` que
 6.2.0 (la que instala hoy) ya no tiene — se cambió a `import * as MapLibreGL` para que
 compile.
 
+**Un cuarto problema, mucho más serio, pasó desapercibido hasta una verificación visual real:**
+el mapa compilaba, no tiraba ningún error en consola, y aun así **nunca cargaba** — se quedaba
+en el spinner de carga para siempre, en `BuyerPanel` y en `BodegaOwnerPanel` por igual, tanto en
+`next dev` como en un build de producción (`next build` + `next start`) real, no solo en dev.
+Diagnosticado instrumentando el mapa real con Playwright (Chromium headless) contra datos reales
+de `/api/bodega/location`, descartando en orden: red y proveedor de tiles (CARTO respondía 200
+en todo), WebGL/el entorno (un mapa MapLibre puro, mismo navegador, cargado directo desde CDN,
+renderizaba Lima sin problema), y la versión de `maplibre-gl` en sí (esa misma versión exacta,
+vía ESM servida por HTTP fuera de este proyecto, también funcionaba). Lo que sí reproducía el
+bug de forma consistente era este componente corriendo dentro del bundle de Next.js/Turbopack:
+`sourcedata` se quedaba pegado en `isSourceLoaded=false` para siempre, cero requests de tiles
+se disparaban, y el Web Worker que crea MapLibre para parsear tiles se creaba con una URL
+rota — apuntando a la URL de la propia página en vez de a un script real.
+
+La causa, dentro de `maplibre-gl` mismo (`dist/maplibre-gl.mjs`): calcula la URL de su worker a
+partir de `import.meta.url` del propio paquete, y solo la usa si empieza con `http(s):`. Bajo
+el bundling de Turbopack esa condición nunca se cumple, así que la librería cae en un string
+vacío y `new Worker("")` termina resolviendo contra la URL de la página actual — un worker que
+"existe" pero no procesa nada, sin lanzar ningún error visible. El fix documentado por MapLibre
+para bundlers en esta situación es apuntar `maplibregl.setWorkerUrl(...)` a una copia servida
+como archivo estático: `scripts/copy-maplibre-worker.mjs` (hook `postinstall`, así nunca queda
+desincronizado de la versión de `maplibre-gl` instalada) copia `maplibre-gl-worker.mjs` **y**
+su import relativo real `maplibre-gl-shared.mjs` (el worker no es un bundle autocontenido, así
+que copiar solo el primero reproduce el mismo cuelgue silencioso, esta vez por un 404 dentro
+del propio worker) a `public/`, sin commitear ninguno de los dos — son artefactos de build,
+como `node_modules` (`.gitignore`). `components/ui/map.tsx` llama
+`MapLibreGL.setWorkerUrl("/maplibre-gl-worker.mjs")` una sola vez, a nivel de módulo, antes de
+que se construya cualquier `Map`.
+
+**Verificado en un build de producción real** (`next build` + `next start`, no solo `next dev`):
+instrumentando el mismo `<Map>`/`<MapMarker>` que usa `BuyerPanel` con los eventos crudos de
+MapLibre, antes del fix se quedaba en `sourcedata isSourceLoaded=false` para siempre con cero
+tiles pedidos; después del fix, `load`/`idle` se disparan en ~4 segundos, se piden tiles reales,
+y el mapa renderiza Lima/Callao con el marker de la bodega de prueba — clickearlo abre el popup
+con su dirección real, leída de `/api/bodega/location`.
+
 ## Atajos conscientes de hackathon
 
 - **eSol → ETH nativo de testnet.** `PaymentRouter.receivePayment` usa `msg.value`
   (ETH nativo de Arbitrum Sepolia) en vez de un token eSol con paridad PEN/USD, para no
-  perder tiempo resolviendo un oráculo de precio durante la hackathon.
+  perder tiempo resolviendo un oráculo de precio durante la hackathon. El plan para reemplazar
+  esto por soles reales (integrar un proveedor de conversión soles↔saldo on-chain en vez de
+  emitir moneda propia, y por qué eso no le agrega costo al cashback) está en la sección
+  "Modelo de negocio" del README.
 - **Oráculo de IA con clave en el servidor.** `app/api/fiado-score/route.ts` firma la
   transacción `updateScoreFromAi` con una clave privada de testnet guardada en
   `ORACLE_PRIVATE_KEY` (variable de entorno del servidor Next.js). En producción esto
@@ -971,10 +1160,9 @@ compile.
 - **El QR de la bodega necesita una URL real, no localhost.** `app/pagar/[code]/page.tsx` solo
   se puede escanear con la cámara del celular si la app está desplegada (Vercel u otro) —
   en `localhost` sigue funcionando el código de 6 dígitos escrito a mano.
-- **WhatsApp (Twilio)**: solo un stub (`app/api/whatsapp/webhook/route.ts`), prioridad
-  más baja del proyecto. WhatsApp Business API requiere aprobación de permisos de
-  Meta — por eso **Telegram se implementó primero**: mismo objetivo (avisar al
-  bodeguero cuando le pagan), sin ese trámite, mucho más rápido de demostrar.
+- **WhatsApp (Twilio)**: por ahora solo un stub (`app/api/whatsapp/webhook/route.ts`) —
+  implementación planeada para las próximas semanas. Por eso **Telegram se implementó
+  primero**: mismo objetivo (avisar al bodeguero cuando le pagan), disponible de inmediato.
 - **Telegram: webhook en producción, polling solo en desarrollo local.**
   `app/api/telegram/webhook/route.ts` es lo que corre de verdad contra Vercel — un daemon de
   polling (`getUpdates` sin parar) no puede correr ahí, cada función serverless responde una
@@ -1001,8 +1189,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 
 1. **Capa de usuario** — app PWA/web para bodeguero y cliente, login con celular/correo
    (Privy, sin "conecta tu wallet" — implementado), QR de cobro en el local (implementado),
-   avisos de pago por Telegram (implementado) y WhatsApp (roadmap, pendiente de aprobación
-   de Meta).
+   avisos de pago por Telegram (implementado) y WhatsApp (en camino, próximas semanas).
 2. **Abstracción de cuenta (ERC-4337)** — smart accounts creadas en el primer login,
    bundler (Pimlico) + paymaster propio (`PuntosPaymaster.sol`) que patrocina la primera
    transacción gratis y cobra el resto en PUNTOS — implementado y probado en vivo. Login por
@@ -1040,7 +1227,7 @@ marca qué parte de esto ya está construido y probado en testnet.
 [Cliente / Bodeguero]
        │  login con teléfono/correo (Privy)
        ▼
-[App PWA / Web] ←→ [Bot de Telegram] (WhatsApp: roadmap)
+[App PWA / Web] ←→ [Bot de Telegram] (WhatsApp: próximas semanas)
        │  UserOperation (smart account, firmada por la wallet embebida)
        ▼
 [Bundler (Pimlico) + PuntosPaymaster.sol]
@@ -1075,15 +1262,15 @@ marca qué parte de esto ya está construido y probado en testnet.
 | Montos en soles (PEN) en vez de ETH, con tasa de cambio real | ✅ Funcional — conversión de display, ver "Atajos" |
 | Registro self-service de bodegas (`PaymentRouter.registerSelf`) | ✅ Probado en vivo — cualquiera se registra desde la web, sin admin |
 | Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
-| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — primera transacción gratis, después se cobra en PUNTOS. Incluye dos fixes encontrados en vivo: PUNTOS de bienvenida para bodegas, y que un primer intento fallido ya no quema la transacción gratis, ver "Login sin wallet..." |
+| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — 5 transacciones gratis por cuenta (antes 1), bodegas patrocinadas siempre sin tocar PUNTOS, techo de cashback bajado de 10% a 3%, ver "Gas sin fricción..." |
 | Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
-| Mapa de bodegas cercanas (mapcn.dev / MapLibre) | ✅ Funcional — cada bodega guarda su ubicación, el cliente ve un mapa con todas y puede pagar directo desde el pin, ver "Mapa de bodegas cercanas" |
+| Mapa de bodegas cercanas (mapcn.dev / MapLibre) | ✅ Funcional — cada bodega guarda su ubicación, el cliente ve un mapa con todas y puede pagar directo desde el pin. Verificado con Playwright contra un build de producción real (`next build`+`next start`) después de arreglar un bug real de carga del worker de MapLibre bajo Turbopack, ver "Mapa de bodegas cercanas" |
 | `InvoiceEscrow` (fiado con garantía parcial) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (11/11 Rust, 43/43 Solidity) — ver "InvoiceEscrow" |
 | `RewardsCatalog` (catálogo de beneficios canjeables entre bodegas) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (23/23 Solidity, 66/66 en todo el repo) — ver "RewardsCatalog" |
 | Compras conjuntas entre bodegas (`GroupOrders.sol`), filtradas por cercanía en el frontend | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (19/19 Solidity, 85/85 en todo el repo) — ver "GroupOrders" |
 | Score crediticio del bodeguero con Zero-Knowledge (`CreditCertificate.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia — prueba ZK real generada y verificada on-chain, ver "CreditCertificate" |
 | Línea de crédito on-chain que consume el certificado ZK (`CreditLine.sol`) | ✅ Desplegado, verificado y probado en vivo — préstamo con garantía reducida (50% en tier 500) y repago, ver "CreditLine" |
-| Notificaciones por WhatsApp | 🔜 Roadmap — stub existente; requiere aprobación de Meta, por eso Telegram salió primero |
+| Notificaciones por WhatsApp | 🔜 En camino (próximas semanas) — stub existente en `app/api/whatsapp/webhook/route.ts` con los TODOs concretos que faltan; Telegram salió primero por ser más rápido de demostrar |
 | Rampas eSol ↔ PEN reales | 🔜 Roadmap — simulado con ETH de testnet |
 | `ePEN` (token propio, redimible 1:1 por soles reales) | 🔜 Roadmap — hoy la app solo convierte el monto a soles para mostrarlo (ver "Atajos"); un `ePEN` real necesitaría un emisor regulado que respalde cada token con soles en custodia (como una stablecoin bancaria), que es un problema de compliance y de rampas fiat, no solo de contrato. Construir el contrato ERC-20 en sí es trivial; lo que falta es esa pieza, y no vale la pena simularla con una paridad falsa que parezca más sólida de lo que es |
 
@@ -1158,16 +1345,20 @@ PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> \
 # después: cast send <FiadoScoringAddress> "setPaymentRouter(address)" <nuevoRouter> ...
 ```
 
-Deploy de `PuntosPaymaster` (requiere `PuntosToken` ya desplegado; el EntryPoint v0.7 usa la
-misma dirección canónica `0x0000000071727De22E5E9d8BAf0edAc6f37da032` en toda red EVM, ya
-confirmada desplegada en Arbitrum Sepolia):
+Deploy de `PuntosPaymaster` (requiere `PuntosToken` y `PaymentRouter` ya desplegados — este
+último como `IBodegaRegistry`, para saber a quién patrocinar sin cobrar PUNTOS; el EntryPoint
+v0.7 usa la misma dirección canónica `0x0000000071727De22E5E9d8BAf0edAc6f37da032` en toda red
+EVM, ya confirmada desplegada en Arbitrum Sepolia):
 
 ```bash
 cd contracts/solidity
-PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> DEPOSIT_ETH=0.02ether \
+PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> DEPOSIT_ETH=0.02ether \
   forge script script/DeployPuntosPaymaster.s.sol:DeployPuntosPaymaster \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
+
+Si `PaymentRouter` se redespliega después, repuntar el paymaster sin redesplegarlo:
+`cast send <PuntosPaymasterAddress> "setBodegaRegistry(address)" <nuevoRouter> ...`.
 
 Deploy de `BeneficioToken` (requiere `PaymentRouter` ya desplegado, usado como
 `IBodegaRegistry`):

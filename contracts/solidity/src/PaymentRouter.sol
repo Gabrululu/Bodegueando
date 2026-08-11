@@ -65,7 +65,14 @@ contract PaymentRouter is Ownable {
     }
 
     function setCashbackBps(uint256 bps) external onlyOwner {
-        if (bps > 1_000) revert CashbackTooHigh(); // hard cap at 10%
+        // Techo duro al 3%: apenas un punto de margen sobre el 2% que ya se usa por defecto,
+        // y muy por debajo de la comisión de un POS tradicional (2.5%-3.5%, ver README) —
+        // así, aunque PUNTOS algún día se respalde 1:1 con soles reales (roadmap: ePEN), el
+        // cashback nunca puede volverse más caro para una bodega que la comisión que está
+        // reemplazando. Hoy PUNTOS no tiene respaldo, así que dar cashback no le cuesta nada
+        // a la bodega que cobra — este techo es una salvaguarda para cuando eso cambie, no
+        // una restricción que afecte la operación actual.
+        if (bps > 300) revert CashbackTooHigh();
         cashbackBps = bps;
         emit CashbackBpsUpdated(bps);
     }

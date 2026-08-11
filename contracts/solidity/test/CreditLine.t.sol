@@ -29,6 +29,7 @@ contract CreditLineTest is Test {
     MockBodegaRegistry registry;
     MockCreditCertificate certificate;
 
+    address owner = makeAddr("owner");
     address lender = makeAddr("lender");
     address lender2 = makeAddr("lender2");
     address bodega = makeAddr("bodega");
@@ -38,7 +39,7 @@ contract CreditLineTest is Test {
         registry = new MockBodegaRegistry();
         registry.setBodega(bodega, true);
         certificate = new MockCreditCertificate();
-        creditLine = new CreditLine(registry, certificate);
+        creditLine = new CreditLine(owner, registry, certificate);
 
         vm.deal(lender, 100 ether);
         vm.deal(lender2, 100 ether);
@@ -232,5 +233,17 @@ contract CreditLineTest is Test {
 
         vm.expectRevert(CreditLine.AlreadyResolved.selector);
         creditLine.liquidate(loanId);
+    }
+
+    function test_SetBodegaRegistry_OnlyOwner() public {
+        MockBodegaRegistry newRegistry = new MockBodegaRegistry();
+
+        vm.prank(randomWallet);
+        vm.expectRevert();
+        creditLine.setBodegaRegistry(newRegistry);
+
+        vm.prank(owner);
+        creditLine.setBodegaRegistry(newRegistry);
+        assertEq(address(creditLine.bodegaRegistry()), address(newRegistry));
     }
 }

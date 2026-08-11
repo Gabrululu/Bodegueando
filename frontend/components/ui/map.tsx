@@ -22,6 +22,18 @@ import { X, Minus, Plus, Locate, Maximize, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
+// maplibre-gl deriva la URL de su Web Worker de su propio `import.meta.url`, y solo la usa si
+// empieza con "http(s):" — bajo el bundling de Next.js/Turbopack esa condición nunca se
+// cumple, así que sin esto la librería cae en un string vacío y `new Worker("")` termina
+// apuntando a la propia página en vez de a un worker real. El mapa entonces se queda cargando
+// para siempre (sourcedata nunca llega a isSourceLoaded=true, cero tiles pedidos) sin tirar
+// ningún error en consola — ver ARCHITECTURE.md, sección del mapa, para el diagnóstico
+// completo. `scripts/copy-maplibre-worker.mjs` (postinstall) copia el worker real a public/;
+// esto le dice a maplibre-gl que lo use en vez de intentar calcular la URL solo.
+if (typeof window !== "undefined") {
+  MapLibreGL.setWorkerUrl("/maplibre-gl-worker.mjs");
+}
+
 const defaultStyles = {
   dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
   light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",

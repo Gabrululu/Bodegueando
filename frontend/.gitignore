@@ -37,6 +37,11 @@ yarn-error.log*
 # vercel
 .vercel
 
+# copiados por scripts/copy-maplibre-worker.mjs (postinstall) desde node_modules —
+# nunca a mano, se regeneran en cada install para no desincronizarse de maplibre-gl
+/public/maplibre-gl-worker.mjs
+/public/maplibre-gl-shared.mjs
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
