@@ -30,7 +30,7 @@ import { fiadoScoringAbi, fiadoScoringAddress, paymentRouterAddress, STABLECOIN_
  */
 
 const rpcUrl = process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL;
-const deployBlockEnv = process.env.NEXT_PUBLIC_CONTRACTS_DEPLOY_BLOCK;
+const deployBlockEnv = process.env.NEXT_PUBLIC_CONTRACTS_DEPLOY_BLOCK?.trim();
 const WINDOW = BigInt(9_000_000);
 const DEFAULT_WINDOWS = 6;
 
@@ -47,7 +47,7 @@ const fiadoRepaidEvent = parseAbiItem("event FiadoRepaid(address indexed bodega,
 
 async function blockWindows(): Promise<Array<{ fromBlock: bigint; toBlock: bigint }>> {
   const head = await client.getBlockNumber();
-  const start = deployBlockEnv ? BigInt(deployBlockEnv) : head - WINDOW * BigInt(DEFAULT_WINDOWS);
+  const start = deployBlockEnv && /^\d+$/.test(deployBlockEnv) ? BigInt(deployBlockEnv) : head - WINDOW * BigInt(DEFAULT_WINDOWS);
   const windows: Array<{ fromBlock: bigint; toBlock: bigint }> = [];
   for (let from = start > BigInt(0) ? start : BigInt(0); from <= head; from += WINDOW) {
     const to = from + WINDOW - BigInt(1);

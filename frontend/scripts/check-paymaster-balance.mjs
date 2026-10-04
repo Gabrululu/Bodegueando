@@ -12,7 +12,7 @@ import { createPublicClient, http, formatEther, parseEther } from "viem";
 import { arbitrumSepolia } from "viem/chains";
 
 const RPC_URL = process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL;
-const PAYMASTER_ADDRESS = process.env.NEXT_PUBLIC_PUNTOS_PAYMASTER_ADDRESS;
+const PAYMASTER_ADDRESS = process.env.NEXT_PUBLIC_PUNTOS_PAYMASTER_ADDRESS?.trim();
 const THRESHOLD_ETH = process.env.PAYMASTER_BALANCE_ALERT_THRESHOLD_ETH || "0.01";
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;

@@ -8,10 +8,10 @@ import { entryPoint07Address } from "viem/account-abstraction";
 import { createSmartAccountClient, type SmartAccountClient } from "permissionless";
 import { toSimpleSmartAccount } from "permissionless/accounts";
 import { createPimlicoClient } from "permissionless/clients/pimlico";
-import { puntosTokenAbi, puntosTokenAddress } from "@/lib/contracts";
+import { puntosPaymasterAddress, puntosTokenAbi, puntosTokenAddress } from "@/lib/contracts";
 
 const pimlicoApiKey = process.env.NEXT_PUBLIC_PIMLICO_API_KEY;
-const paymasterAddress = process.env.NEXT_PUBLIC_PUNTOS_PAYMASTER_ADDRESS as Address | undefined;
+const paymasterAddress = puntosPaymasterAddress;
 const rpcUrl = process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL;
 
 // Any allowance above this is "effectively unlimited" for our purposes — used to decide
