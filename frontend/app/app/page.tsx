@@ -62,8 +62,12 @@ export default function AppHome() {
         { address: paymentRouterAddress, abi: paymentRouterAbi, functionName: "registerSelf", args: [] },
       ]);
       isBodegaQuery.refetch();
-    } catch {
-      setRegisterError("No pudimos registrar tu bodega ahora mismo. Intenta de nuevo.");
+    } catch (err) {
+      // El detalle real (bundler, paymaster, Privy) queda en la consola para poder diagnosticarlo.
+      console.error("[registro de bodega] falló", err);
+      // Si la cuenta igual quedó registrada (p. ej. el recibo tardó), entra directo al panel.
+      const { data: registered } = await isBodegaQuery.refetch();
+      if (!registered) setRegisterError("No pudimos registrar tu bodega ahora mismo. Recarga la página e intenta de nuevo.");
     } finally {
       setIsRegistering(false);
     }
