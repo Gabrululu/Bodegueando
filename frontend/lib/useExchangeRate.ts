@@ -6,6 +6,7 @@ import { STABLECOIN_DECIMALS } from "@/lib/contracts";
 
 const REFRESH_MS = 5 * 60 * 1000;
 const FALLBACK_USD_PEN = 3.39;
+const solesNumberFormat = new Intl.NumberFormat("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /**
  * Tasa USD -> PEN para que la UI siempre muestre soles: todo el dinero de la app está en USDG
@@ -44,7 +45,7 @@ export function useExchangeRate() {
   }, []);
 
   function formatSolesFromUsd(usdAmount: number): string {
-    return `S/ ${(usdAmount * usdPen).toFixed(2)}`;
+    return `S/ ${solesNumberFormat.format(usdAmount * usdPen)}`;
   }
 
   function solesToUsd(soles: number): number {

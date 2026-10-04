@@ -700,7 +700,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
         setPayError("No tienes saldo suficiente para este pago.");
         return;
       }
-      await sendAndWait(smartAccountClient, address, stablecoinPaymentCalls("receivePayment", bodegaAddress, amount));
+      const result = await sendAndWait(smartAccountClient, address, stablecoinPaymentCalls("receivePayment", bodegaAddress, amount));
 
       setIsPayConfirmed(true);
       stablecoinBalanceQuery.refetch();
@@ -709,15 +709,13 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       limitQuery.refetch();
       aiInfoQuery.refetch();
 
-      // Best-effort: avisar por Telegram si la bodega vinculó su cuenta. No bloquea
-      // ni muestra error al comprador si falla — el pago ya está confirmado on-chain.
+      // Best-effort: avisar por Telegram si la bodega vinculó su cuenta. No bloquea ni muestra
+      // error al comprador si falla — el pago ya está confirmado on-chain. El servidor arma el
+      // mensaje leyendo esta transacción, así que solo se manda el hash, nunca un texto.
       fetch("/api/telegram/notify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bodegaAddress,
-          text: `💰 Te pagaron S/ ${Number(amountSoles || "0").toFixed(2)} en Bodegueando.`,
-        }),
+        body: JSON.stringify({ bodegaAddress, kind: "payment", txHash: result.receipt.transactionHash }),
       }).catch(() => {});
     } catch {
       setPayError("No se pudo completar el pago. Intenta de nuevo.");

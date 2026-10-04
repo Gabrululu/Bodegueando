@@ -82,7 +82,11 @@ export default function AppHome() {
 
   return (
     <div className="flex flex-col flex-1 items-center bg-[#fafaf7] [font-family:var(--font-geist-sans)]">
-      <main className="flex w-full max-w-xl flex-col items-center gap-8 px-6 py-16 text-center">
+      <main
+        className={`flex w-full flex-col items-center gap-8 px-4 text-center sm:px-6 ${
+          showBodegaPanel ? "max-w-5xl py-8" : "max-w-xl py-16"
+        }`}
+      >
         <div className="space-y-3">
           <div className="flex items-center justify-center gap-2.5">
             <img src="/logo-mark.svg" alt="" className="h-9 w-9 shrink-0" />

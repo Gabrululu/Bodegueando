@@ -13,41 +13,37 @@ import {GroupOrders, IBodegaRegistry as IGroupOrdersRegistry} from "../src/Group
 import {CreditLine, IBodegaRegistry as ICreditLineRegistry, ICreditCertificate} from "../src/CreditLine.sol";
 import {IFiadoScoring} from "../src/interfaces/IFiadoScoring.sol";
 
-/// @notice Owner-only setters of the Stylus FiadoScoring contract (not part of IFiadoScoring,
-/// which is the surface the other contracts call).
-interface IFiadoScoringAdmin {
-    function owner() external view returns (address);
-    function setPaymentRouter(address router) external;
-    function setAiOracle(address oracle) external;
-    function setEscrow(address escrow) external;
-}
-
 /// @notice Contracts that already exist and only need to learn the new bodega registry.
 interface IRepointable {
     function owner() external view returns (address);
     function setBodegaRegistry(address registry) external;
 }
 
-/// @notice Deploys every contract that moves money, all settling in USDG, and wires them
-/// together in one broadcast:
-///   PaymentRouter -> PuntosToken minter + FiadoScoring payment router
+/// @notice Deploys every contract that moves money, all settling in USDG, and wires the
+/// Solidity side together in one broadcast:
+///   PaymentRouter -> PuntosToken minter
 ///   PuntosPaymaster (+ ETH deposit in the EntryPoint)
-///   InvoiceEscrow -> FiadoScoring escrow
-///   GroupOrders, CreditLine
+///   InvoiceEscrow, GroupOrders, CreditLine
 ///   RewardsCatalog / BeneficioToken (already deployed) repointed to the new router, when the
 ///   deployer still owns them.
 ///
 /// FiadoScoring is reused, not redeployed: new Stylus activations are paused on Arbitrum
-/// (One, Nova and Sepolia) since 2026-10-02, and its scoring is unit-agnostic anyway. The
-/// deployer must own it.
+/// (One, Nova and Sepolia) since 2026-10-02, and its scoring is unit-agnostic anyway.
+///
+/// This script never CALLS FiadoScoring: forge executes scripts in its own EVM, which can't run
+/// Stylus (WASM) code, so any call to it reverts during simulation ("OpcodeNotFound"). Only its
+/// address is stored (PaymentRouter/InvoiceEscrow constructors don't call it). Its two setters —
+/// `setPaymentRouter(router)` and `setEscrow(escrow)` — are sent afterwards with `cast send`,
+/// which estimates gas on the Arbitrum node itself. `script/deploy-usdg-stack.sh` checks
+/// ownership on-chain and runs both steps in order.
 ///
 /// OLD_PAYMASTER_ADDRESS (optional): the previous PuntosPaymaster, owned by the deployer. Its
 /// whole EntryPoint deposit is withdrawn to the deployer before funding the new one, so the
 /// ETH isn't stranded.
 ///
-/// Usage:
+/// Usage (prefer the wrapper script):
 ///   FIADO_SCORING_ADDRESS=... PUNTOS_TOKEN_ADDRESS=... CREDIT_CERTIFICATE_ADDRESS=... \
-///   [AI_ORACLE_ADDRESS=...] [REWARDS_CATALOG_ADDRESS=...] [BENEFICIO_TOKEN_ADDRESS=...] \
+///   [REWARDS_CATALOG_ADDRESS=...] [BENEFICIO_TOKEN_ADDRESS=...] \
 ///   [OLD_PAYMASTER_ADDRESS=...] [PUNTOS_PER_ETH=2500e18] [PAYMASTER_DEPOSIT_ETH=0.02e18] \
 ///   [STABLECOIN_ADDRESS=...] \
 ///   forge script script/DeployUsdgStack.s.sol:DeployUsdgStack \
@@ -70,14 +66,12 @@ contract DeployUsdgStack is StablecoinScript {
         address fiadoScoring = vm.envAddress("FIADO_SCORING_ADDRESS");
         PuntosToken puntos = PuntosToken(vm.envAddress("PUNTOS_TOKEN_ADDRESS"));
         address creditCertificate = vm.envAddress("CREDIT_CERTIFICATE_ADDRESS");
-        address aiOracle = vm.envOr("AI_ORACLE_ADDRESS", address(0));
         address rewardsCatalog = vm.envOr("REWARDS_CATALOG_ADDRESS", address(0));
         address beneficioToken = vm.envOr("BENEFICIO_TOKEN_ADDRESS", address(0));
         uint256 puntosPerEth = vm.envOr("PUNTOS_PER_ETH", uint256(2500 ether));
         uint256 paymasterDeposit = vm.envOr("PAYMASTER_DEPOSIT_ETH", uint256(0.02 ether));
         address oldPaymaster = vm.envOr("OLD_PAYMASTER_ADDRESS", address(0));
 
-        require(IFiadoScoringAdmin(fiadoScoring).owner() == deployer, "deployer must own FiadoScoring");
         require(puntos.owner() == deployer, "deployer must own PuntosToken");
 
         vm.startBroadcast(deployerKey);
@@ -89,8 +83,6 @@ contract DeployUsdgStack is StablecoinScript {
 
         d.router = new PaymentRouter(deployer, puntos, IFiadoScoring(fiadoScoring), stablecoin);
         puntos.setMinter(address(d.router));
-        IFiadoScoringAdmin(fiadoScoring).setPaymentRouter(address(d.router));
-        if (aiOracle != address(0)) IFiadoScoringAdmin(fiadoScoring).setAiOracle(aiOracle);
 
         d.paymaster = new PuntosPaymaster(
             IEntryPoint(ENTRY_POINT_V07), puntos, IPaymasterRegistry(address(d.router)), deployer, puntosPerEth
@@ -99,7 +91,6 @@ contract DeployUsdgStack is StablecoinScript {
 
         d.escrow =
             new InvoiceEscrow(deployer, IEscrowRegistry(address(d.router)), IFiadoScoring(fiadoScoring), stablecoin);
-        IFiadoScoringAdmin(fiadoScoring).setEscrow(address(d.escrow));
 
         d.groupOrders = new GroupOrders(deployer, IGroupOrdersRegistry(address(d.router)), stablecoin);
         d.creditLine = new CreditLine(
@@ -118,9 +109,9 @@ contract DeployUsdgStack is StablecoinScript {
         console.log("NEXT_PUBLIC_GROUP_ORDERS_ADDRESS=", address(d.groupOrders));
         console.log("NEXT_PUBLIC_CREDIT_LINE_ADDRESS=", address(d.creditLine));
         console.log("NEXT_PUBLIC_FIADO_SCORING_ADDRESS=", fiadoScoring);
-        if (aiOracle == address(0)) {
-            console.log("AI_ORACLE_ADDRESS not set: run setAiOracle on FiadoScoring before using /api/fiado-score");
-        }
+        console.log("Still needed on FiadoScoring (Stylus), via cast send:");
+        console.log("  setPaymentRouter(address)", address(d.router));
+        console.log("  setEscrow(address)", address(d.escrow));
     }
 
     function _repoint(address target, address router, address deployer, string memory name) internal {

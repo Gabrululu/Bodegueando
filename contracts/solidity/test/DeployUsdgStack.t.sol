@@ -24,10 +24,8 @@ contract DeployUsdgStackTest is Test {
 
         MockUSDG usdg = new MockUSDG();
         MockFiadoScoring fiado = new MockFiadoScoring();
-        fiado.setOwner(deployer);
         PuntosToken puntos = new PuntosToken(deployer);
         RewardsCatalog catalog = new RewardsCatalog(deployer, IBodegaRegistry(address(0xdead)), puntos);
-        address aiOracle = makeAddr("aiOracle");
 
         // The previous paymaster holds most of the ETH; the deployer alone can't fund a new one.
         PuntosPaymaster oldPaymaster = new PuntosPaymaster(
@@ -40,7 +38,6 @@ contract DeployUsdgStackTest is Test {
         vm.setEnv("FIADO_SCORING_ADDRESS", vm.toString(address(fiado)));
         vm.setEnv("PUNTOS_TOKEN_ADDRESS", vm.toString(address(puntos)));
         vm.setEnv("CREDIT_CERTIFICATE_ADDRESS", vm.toString(makeAddr("creditCertificate")));
-        vm.setEnv("AI_ORACLE_ADDRESS", vm.toString(aiOracle));
         vm.setEnv("REWARDS_CATALOG_ADDRESS", vm.toString(address(catalog)));
         vm.setEnv("PAYMASTER_DEPOSIT_ETH", "10000000000000000");
         vm.setEnv("OLD_PAYMASTER_ADDRESS", vm.toString(address(oldPaymaster)));
@@ -49,9 +46,12 @@ contract DeployUsdgStackTest is Test {
 
         assertEq(address(d.router.stablecoin()), address(usdg));
         assertEq(puntos.minter(), address(d.router));
-        assertEq(fiado.paymentRouter(), address(d.router));
-        assertEq(fiado.aiOracle(), aiOracle);
-        assertEq(fiado.escrow(), address(d.escrow));
+        // FiadoScoring is Stylus: the script must never call it (forge can't execute WASM) — its
+        // setters are sent afterwards with cast. Only its address is wired into the new contracts.
+        assertEq(fiado.paymentRouter(), address(0), "script must not call FiadoScoring");
+        assertEq(fiado.escrow(), address(0), "script must not call FiadoScoring");
+        assertEq(address(d.router.fiadoScoring()), address(fiado));
+        assertEq(address(d.escrow.fiadoScoring()), address(fiado));
         assertEq(address(d.paymaster.bodegaRegistry()), address(d.router));
         assertEq(d.paymaster.puntosPerEth(), 2500 ether);
         assertEq(IEntryPoint(ENTRY_POINT_V07).balanceOf(address(d.paymaster)), 0.01 ether);

@@ -285,9 +285,8 @@ debt ledger, the AI oracle's on-chain circuit breaker, collateral-backed fiado, 
 joint purchases between bodegas, ZK credit certificate and the on-chain credit line that consumes
 it, wallet-less login with gas paid in points, Telegram bot, and a map of nearby bodegas.
 
-USDG settlement for every contract that moves money is implemented and tested (unit, fuzz and an
-Arbitrum Sepolia fork test against the real USDG contract) and is being redeployed to Arbitrum
-Sepolia with `script/DeployUsdgStack.s.sol`. Coming next: WhatsApp notifications (next few
+Every contract that moves money now settles in USDG on Arbitrum Sepolia — deployed and verified on
+2026-10-04, after unit, fuzz and fork tests against the real USDG contract. Coming next: WhatsApp notifications (next few
 weeks). Pending on third parties: real soles ↔ USDG ramps.
 
 The detail of each piece — mechanism, what it deliberately does NOT solve, test coverage, and the

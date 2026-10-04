@@ -42,20 +42,23 @@ bodegueando/
 |---|---|---|
 | **FiadoScoring** (Stylus/Rust) | `0x22FD7ED957b356dcF4a93574D24fC724736480B2` | [view / verified](https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [view verified code](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
-| **PaymentRouter** | `0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F` | [view verified code](https://sepolia.arbiscan.io/address/0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F#code) |
-| **PuntosPaymaster** | `0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403` | [view verified code](https://sepolia.arbiscan.io/address/0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403#code) |
+| **PaymentRouter** (USDG) | `0xe25Ee43a2A7Ba1F582603E47DE1717E36EF57329` | [view verified code](https://sepolia.arbiscan.io/address/0xe25Ee43a2A7Ba1F582603E47DE1717E36EF57329#code) |
+| **PuntosPaymaster** | `0x857836be11e433559cBea32120324B232Dddc87F` | [view verified code](https://sepolia.arbiscan.io/address/0x857836be11e433559cBea32120324B232Dddc87F#code) |
 | **BeneficioToken** (social programs PoC) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [view verified code](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
-| **InvoiceEscrow** (fiado with partial collateral) | `0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4` | [view verified code](https://sepolia.arbiscan.io/address/0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4#code) |
+| **InvoiceEscrow** (fiado with partial collateral, USDG) | `0xAEF227E192B2EFbb85D8CAD5C6E5dd3c38513F72` | [view verified code](https://sepolia.arbiscan.io/address/0xAEF227E192B2EFbb85D8CAD5C6E5dd3c38513F72#code) |
 | **RewardsCatalog** (rewards catalog) | `0x0c07b1b63aAbAD36d15877D80f10411534C44a2f` | [view verified code](https://sepolia.arbiscan.io/address/0x0c07b1b63aAbAD36d15877D80f10411534C44a2f#code) |
-| **GroupOrders** (joint purchases between bodegas) | `0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0` | [view verified code](https://sepolia.arbiscan.io/address/0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0#code) |
+| **GroupOrders** (joint purchases between bodegas, USDG) | `0x20Ec045bdc3C1a371b0a5B94d136c1d58C0160DF` | [view verified code](https://sepolia.arbiscan.io/address/0x20Ec045bdc3C1a371b0a5B94d136c1d58C0160DF#code) |
 | **CreditCertificate** | `0xc42547586FbEfCA3D8EA189B1e87a2c234f67828` | [view verified code](https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code) |
 | **Groth16Verifier** (ZK verifier, auto-generated) | `0x6a61e780f9a811eA28718146A9B2F720C19359fb` | [view verified code](https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code) |
-| **CreditLine** | `0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29` | [view verified code](https://sepolia.arbiscan.io/address/0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29#code) |
+| **CreditLine** (USDG) | `0x126409a7DD1CF34004E1A1BFd416eb666Cd0351F` | [view verified code](https://sepolia.arbiscan.io/address/0x126409a7DD1CF34004E1A1BFd416eb666Cd0351F#code) |
 
-> These are the pre-USDG deployments, settling in testnet ETH. `PaymentRouter`,
-> `PuntosPaymaster`, `InvoiceEscrow`, `GroupOrders` and `CreditLine` are being redeployed in
-> their USDG versions with `script/DeployUsdgStack.s.sol` (see "USDG payments" and "Deploying
-> the USDG stack"); this table will be updated with the new addresses.
+> `PaymentRouter`, `PuntosPaymaster`, `InvoiceEscrow`, `GroupOrders` and `CreditLine` are the
+> USDG versions, deployed on 2026-10-04 from block `315544209` with
+> `script/deploy-usdg-stack.sh` (see "Deploying the USDG stack"). The other contracts were reused
+> and rewired: `FiadoScoring` points to the new router and escrow, `PuntosToken`'s minter is the
+> new router, and `RewardsCatalog` reads the new bodega registry. The pre-USDG (testnet-ETH)
+> deployments — router `0xdb1f…191F`, paymaster `0xa00d…6403`, escrow `0x9903…7a4`, group orders
+> `0xfA47…2EB0`, credit line `0x7135…4F29` — are retired; none of them holds funds.
 
 Every contract that needs to know who is a registered bodega (`InvoiceEscrow`,
 `RewardsCatalog`, `GroupOrders`, `CreditLine`, `BeneficioToken`, `PuntosPaymaster`) references
@@ -456,6 +459,37 @@ source of truth remains the contract, not a date calculation on the client.
 for `BeneficioToken` itself. What's next is roadmap outside this contract (see "Current MVP"
 below).
 
+### Shopkeeper dashboard: five areas instead of one long column
+
+`BodegaOwnerPanel` used to stack 11 sections in a single column. It's now a dashboard
+(`components/bodega/`) with five areas — **Inicio** (overview), **Cobrar** (get paid), **Fiado**
+(store credit), **Crédito** (credit) and **Mi red** (network) — a bottom tab bar on phones and a
+sidebar on desktop. Everything is shown in soles.
+
+- **The tab lives in the URL** (`/app?tab=fiado`), read with `useSyncExternalStore` over
+  `history.pushState`/`popstate`, so the back button works and a link (e.g. from the Telegram bot)
+  can open a specific area. Only the active tab is mounted, so only its data is fetched.
+- **Inicio** shows today's and the week's sales, what's owed in fiado, the trust level, a
+  "Pendientes" list built from contract state (overdue or soon-due collateral invoices, loans
+  due, group orders ready to withdraw, closing soon or refundable — each one links to where it's
+  resolved), and a first-steps checklist for new bodegas that disappears once complete.
+- **Full sales history and "Quién te debe" without a backend or indexer.** `lib/bodega/activity.ts`
+  reads `PaymentRouter.PaymentReceived` and `FiadoScoring.FiadoExtended`/`FiadoRepaid` with
+  `eth_getLogs` filtered by the bodega's indexed topic, split into ≤9M-block windows (the Arbitrum
+  Sepolia RPC caps a query at 10M blocks) fetched in parallel, starting at
+  `NEXT_PUBLIC_CONTRACTS_DEPLOY_BLOCK` when set. Each debtor's current balance comes from
+  `getFiadoDebt`, the source of truth, in one multicall. The raw RPC call is used instead of
+  `client.getLogs` because the node returns a `blockTimestamp` per log that viem's formatter drops;
+  when it comes back empty (`0x0`, seen on older logs) the block is fetched once, batched.
+- **Sales chart** (`SalesChart.tsx`): daily totals for 7 or 30 days, one series, ≤24px columns with a
+  rounded data end, hairline gridlines at clean round values, a per-bar tooltip on hover/focus
+  (aligned inward at the edges so it never overflows) and the same data as a table.
+- **"Recordarle" (remind)** uses `app/api/fiado/remind`: the server builds the message itself from
+  the on-chain debt, only sends if there is debt, and allows at most one reminder per
+  bodega/customer per day (`setIfNotExists` in `lib/kv.ts`) — callers never choose the text.
+- Shared reads live in `lib/bodega/hooks.ts`; wagmi caches by (contract, function, args), so
+  Inicio and Fiado share the same query and a refetch in one tab updates the other.
+
 ### The Telegram bot as a profile (tested live)
 
 Neither the web app nor the bot ever shows "ETH", "USDG" or a `0x...` address to the shopkeeper
@@ -479,6 +513,21 @@ that the webhook and `GET /api/telegram/profile` (which still exists for the dev
 share the same code instead of duplicating it. The `X-Telegram-Bot-Api-Secret-Token` header
 (compared against `TELEGRAM_WEBHOOK_SECRET`) rejects requests that don't really come from
 Telegram.
+
+**Outgoing alerts never carry caller-chosen text.** `POST /api/telegram/notify` used to forward any
+`text` to any linked chat — anyone could have used the official bot to send phishing in
+Bodegueando's name. It now only accepts two message kinds, both built server-side:
+
+- `{ kind: "payment", bodegaAddress, txHash }` — the server reads the transaction receipt and only
+  sends if it contains a `PaymentReceived` from the current `PaymentRouter` to that bodega; the
+  amount comes from the event, not the client. One alert per transaction (`setIfNotExists`), so
+  replaying the call does nothing.
+- `{ kind: "test", bodegaAddress }` — the fixed "notifications on" message, at most once every 10
+  minutes per account.
+
+If Telegram rejects the send, the dedupe key is released so it can be retried. The fiado
+reminder (`/api/fiado/remind`) follows the same rule: message built from on-chain debt, rate
+limited.
 
 **Linking:**
 1. From `BodegaOwnerPanel.tsx` (or `BuyerPanel.tsx`, optional for buyers) the user requests a
@@ -1060,36 +1109,40 @@ cd contracts/solidity && ARBITRUM_SEPOLIA_RPC_URL=https://sepolia-rollup.arbitru
 
 #### Deploying the USDG stack (recommended)
 
-`script/DeployUsdgStack.s.sol` deploys, in a single broadcast, everything that moves money
-(`PaymentRouter`, `PuntosPaymaster`, `InvoiceEscrow`, `GroupOrders`, `CreditLine`) and wires it:
-`PuntosToken`'s minter, `setPaymentRouter`/`setEscrow`/`setAiOracle` on `FiadoScoring`, the
-paymaster's EntryPoint deposit, and `setBodegaRegistry` on `RewardsCatalog`/`BeneficioToken` when
-the deployer owns them. Before that, it recovers the previous paymaster's ETH deposit. It reuses
-`PuntosToken`, `FiadoScoring` (Stylus is paused, see "USDG payments") and `CreditCertificate`.
+`script/deploy-usdg-stack.sh` runs the whole deployment in order and is how the current contracts
+were deployed (2026-10-04):
+
+1. **On-chain pre-checks**: the RPC is Arbitrum Sepolia; the deployer owns `FiadoScoring`,
+   `PuntosToken` and the previous paymaster; `FiadoScoring` accepts `setPaymentRouter`/`setEscrow`
+   from the deployer (checked with `eth_call`, nothing sent); balances.
+2. **`forge script DeployUsdgStack`** — deploys `PaymentRouter`, `PuntosPaymaster`,
+   `InvoiceEscrow`, `GroupOrders` and `CreditLine`, sets `PuntosToken`'s minter, funds the
+   paymaster's EntryPoint deposit (after recovering the old paymaster's), and repoints
+   `RewardsCatalog`/`BeneficioToken` when the deployer owns them.
+3. **`cast send` to `FiadoScoring`** (`setPaymentRouter`, `setEscrow`) and a read-back check.
+   This can't live in the forge script: forge executes scripts in its own EVM, which can't run
+   Stylus (WASM) code — any call to `FiadoScoring` reverts there with `OpcodeNotFound`. `cast`
+   estimates gas on the Arbitrum node itself, which does run Stylus.
+4. **Arbiscan verification** of each new contract (Etherscan API v2; non-blocking).
+5. Prints the `NEXT_PUBLIC_*` values for the frontend, including
+   `NEXT_PUBLIC_CONTRACTS_DEPLOY_BLOCK`.
 
 ```bash
 cd contracts/solidity
-# .env: PRIVATE_KEY (deployer 0x3B0e…AFbf), ARBITRUM_SEPOLIA_RPC_URL, ARBISCAN_API_KEY
-FIADO_SCORING_ADDRESS=0x22FD7ED957b356dcF4a93574D24fC724736480B2 \
-PUNTOS_TOKEN_ADDRESS=0x2bd8AbEB2F5598f8477560C70c742aFfc22912de \
-CREDIT_CERTIFICATE_ADDRESS=0xc42547586FbEfCA3D8EA189B1e87a2c234f67828 \
-AI_ORACLE_ADDRESS=<address of ORACLE_PRIVATE_KEY> \
-REWARDS_CATALOG_ADDRESS=0x0c07b1b63aAbAD36d15877D80f10411534C44a2f \
-BENEFICIO_TOKEN_ADDRESS=0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc \
-OLD_PAYMASTER_ADDRESS=0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403 \
-PUNTOS_PER_ETH=<current ETH/USD price>000000000000000000 \
-  forge script script/DeployUsdgStack.s.sol:DeployUsdgStack \
-  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+# .env: PRIVATE_KEY (deployer 0x3B0e…AFbf), ARBITRUM_SEPOLIA_RPC_URL, ARBISCAN_API_KEY (etherscan.io key, API v2)
+script/deploy-usdg-stack.sh              # simulation only — sends nothing
+script/deploy-usdg-stack.sh broadcast    # real deployment
+# PUNTOS_PER_ETH=<ETH/USD × 1e18> is optional; by default it's read from CoinGecko
 ```
 
-The script prints the `NEXT_PUBLIC_*_ADDRESS` values for the frontend. Afterwards:
+Afterwards:
 
-- `BeneficioToken` is owned by a smart account, not the deployer: rewire it from that account with
-  `setBodegaRegistry(newRouter)`.
+- `BeneficioToken` is owned by a smart account, not the deployer: rewire it from that account
+  (Mi red → "Actualizar registro de bodegas" in the bodega dashboard).
 - Bodegas register again (the new router starts with an empty `isBodega`).
 - Fund the `FAUCET_PRIVATE_KEY` wallet with USDG at [faucet.paxos.com](https://faucet.paxos.com)
   (plus a little ETH for its own gas).
-- Update the "Deployed contracts" table.
+- Update the "Deployed contracts" table and `docs/index.html`.
 
 The individual scripts (`RedeployPaymentRouter`, `DeployInvoiceEscrow`, `DeployGroupOrders`,
 `DeployCreditLine`, `DeployPuntosPaymaster`) still work for redeploying a single contract. They
