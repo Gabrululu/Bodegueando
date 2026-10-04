@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
+import {StablecoinScript} from "./StablecoinScript.sol";
 import {CreditLine, IBodegaRegistry, ICreditCertificate} from "../src/CreditLine.sol";
 
 /// @notice Deploys CreditLine against the already-deployed PaymentRouter (read-only
@@ -12,7 +13,7 @@ import {CreditLine, IBodegaRegistry, ICreditCertificate} from "../src/CreditLine
 ///   PAYMENT_ROUTER_ADDRESS=... CREDIT_CERTIFICATE_ADDRESS=... \
 ///   forge script script/DeployCreditLine.s.sol:DeployCreditLine \
 ///     --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
-contract DeployCreditLine is Script {
+contract DeployCreditLine is StablecoinScript {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
@@ -21,8 +22,9 @@ contract DeployCreditLine is Script {
 
         vm.startBroadcast(deployerKey);
 
-        CreditLine creditLine =
-            new CreditLine(deployer, IBodegaRegistry(paymentRouterAddress), ICreditCertificate(creditCertificateAddress));
+        CreditLine creditLine = new CreditLine(
+            deployer, IBodegaRegistry(paymentRouterAddress), ICreditCertificate(creditCertificateAddress), _stablecoin()
+        );
 
         vm.stopBroadcast();
 

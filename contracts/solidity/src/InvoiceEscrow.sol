@@ -2,7 +2,11 @@
 pragma solidity ^0.8.26;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IFiadoScoring} from "./interfaces/IFiadoScoring.sol";
+import {StablecoinSettlement} from "./StablecoinSettlement.sol";
 
 /// @notice Minimal read-only view into PaymentRouter's bodega registry — same narrow
 /// interface BeneficioToken.sol uses, so InvoiceEscrow doesn't need PaymentRouter's whole
@@ -13,8 +17,10 @@ interface IBodegaRegistry {
 
 /// @notice Fiado con garantía parcial: an alternative to FiadoScoring's unsecured
 /// `extendFiado` for amounts a bodega doesn't want to lend on trust alone. The customer posts
-/// a partial ETH collateral (the same testnet-ETH stand-in for eSol used everywhere else) that
-/// this contract holds until the invoice is repaid or its due date passes.
+/// a partial collateral in the settlement stablecoin (USDG) that this contract holds until the
+/// invoice is repaid or its due date passes. Principal, collateral and repayments are stored
+/// in stablecoin decimals; what's recorded on FiadoScoring is normalized to USD-wei, the same
+/// unit PaymentRouter records unsecured fiado in.
 ///
 /// This does NOT replace `extendFiado` — a bodega can keep fiar-ing small amounts unsecured
 /// exactly as before. It's a second path for larger amounts, and it feeds the SAME debt ledger:
@@ -28,10 +34,12 @@ interface IBodegaRegistry {
 ///
 /// Any address can be `bodega` here as long as `bodegaRegistry.isBodega` says so — including
 /// self-registered ones (`PaymentRouter.registerSelf`) — so every external transfer follows
-/// checks-effects-interactions: invoice state is fully updated before any ETH leaves the
-/// contract or FiadoScoring is called, so a malicious bodega/customer contract can't reenter
-/// a still-"Active" invoice to double-claim.
-contract InvoiceEscrow is Ownable {
+/// checks-effects-interactions (invoice state is fully updated before any token moves or
+/// FiadoScoring is called) and every fund-moving function is also `nonReentrant`, as a second
+/// line of defense in case the stablecoin ever gains transfer hooks.
+contract InvoiceEscrow is Ownable, ReentrancyGuard, StablecoinSettlement {
+    using SafeERC20 for IERC20;
+
     enum Status {
         Proposed,
         Active,
@@ -68,11 +76,15 @@ contract InvoiceEscrow is Ownable {
     error NotInvoiceBodega();
     error NotInvoiceCustomer();
     error InvalidState();
-    error WrongCollateralAmount();
     error NotYetDue();
 
     event InvoiceProposed(
-        uint256 indexed id, address indexed bodega, address indexed customer, uint256 principal, uint256 collateralRequired, uint64 dueDate
+        uint256 indexed id,
+        address indexed bodega,
+        address indexed customer,
+        uint256 principal,
+        uint256 collateralRequired,
+        uint64 dueDate
     );
     event InvoiceCancelled(uint256 indexed id);
     event InvoiceAccepted(uint256 indexed id, uint256 collateral);
@@ -80,7 +92,10 @@ contract InvoiceEscrow is Ownable {
     event InvoiceDefaulted(uint256 indexed id, uint256 claimedByBodega, uint256 refundedToCustomer);
     event BodegaRegistryUpdated(address indexed bodegaRegistry);
 
-    constructor(address initialOwner, IBodegaRegistry _bodegaRegistry, IFiadoScoring _fiadoScoring) Ownable(initialOwner) {
+    constructor(address initialOwner, IBodegaRegistry _bodegaRegistry, IFiadoScoring _fiadoScoring, IERC20 _stablecoin)
+        Ownable(initialOwner)
+        StablecoinSettlement(_stablecoin)
+    {
         bodegaRegistry = _bodegaRegistry;
         fiadoScoring = _fiadoScoring;
     }
@@ -92,8 +107,11 @@ contract InvoiceEscrow is Ownable {
     }
 
     /// @notice Bodega proposes a collateral-backed invoice for `customer`. No funds or debt
-    /// move yet — the customer still has to accept it.
-    function proposeInvoice(address customer, uint256 principal, uint256 collateralRequired, uint64 dueDate) external returns (uint256 id) {
+    /// move yet — the customer still has to accept it. Amounts are in stablecoin decimals.
+    function proposeInvoice(address customer, uint256 principal, uint256 collateralRequired, uint64 dueDate)
+        external
+        returns (uint256 id)
+    {
         if (!bodegaRegistry.isBodega(msg.sender)) revert NotABodega();
         if (customer == address(0)) revert ZeroAddress();
         if (principal == 0) revert ZeroAmount();
@@ -123,35 +141,36 @@ contract InvoiceEscrow is Ownable {
         emit InvoiceCancelled(id);
     }
 
-    /// @notice Customer accepts a proposed invoice, posting exactly the required collateral
-    /// (`msg.value`). Atomically records the real debt on FiadoScoring so it counts toward the
-    /// customer's score/history like any other fiado extension.
-    function acceptInvoice(uint256 id) external payable {
+    /// @notice Customer accepts a proposed invoice, posting the required collateral (pulled
+    /// via transferFrom, so it must be approved first). Atomically records the real debt on
+    /// FiadoScoring so it counts toward the customer's score/history like any other fiado.
+    function acceptInvoice(uint256 id) external nonReentrant {
         Invoice storage inv = invoices[id];
         if (inv.customer != msg.sender) revert NotInvoiceCustomer();
         if (inv.status != Status.Proposed) revert InvalidState();
-        if (msg.value != inv.collateral) revert WrongCollateralAmount();
 
         inv.status = Status.Active;
+        emit InvoiceAccepted(id, inv.collateral);
 
-        fiadoScoring.extendFiadoFor(inv.bodega, inv.customer, inv.principal);
-
-        emit InvoiceAccepted(id, msg.value);
+        if (inv.collateral > 0) {
+            stablecoin.safeTransferFrom(msg.sender, address(this), inv.collateral);
+        }
+        fiadoScoring.extendFiadoFor(inv.bodega, inv.customer, _toUsd18(inv.principal));
     }
 
-    /// @notice Customer repays this specific invoice (partial payments allowed). Forwards the
-    /// ETH to the bodega and records the repayment on FiadoScoring, same as
-    /// `PaymentRouter.payFiado` does for unsecured fiado. Once `repaidAmount` reaches
-    /// `principal`, the full collateral is returned to the customer.
-    function repayInvoice(uint256 id) external payable {
+    /// @notice Customer repays up to `amount` of this invoice (partial payments allowed; only
+    /// what's still owed is pulled, so overpaying is impossible rather than refunded). Goes
+    /// straight from the customer to the bodega and is recorded on FiadoScoring, same as
+    /// `PaymentRouter.payFiado`. Once `repaidAmount` reaches `principal`, the full collateral
+    /// is returned to the customer.
+    function repayInvoice(uint256 id, uint256 amount) external nonReentrant {
         Invoice storage inv = invoices[id];
         if (inv.customer != msg.sender) revert NotInvoiceCustomer();
         if (inv.status != Status.Active) revert InvalidState();
-        if (msg.value == 0) revert ZeroAmount();
+        if (amount == 0) revert ZeroAmount();
 
         uint256 remaining = inv.principal - inv.repaidAmount;
-        uint256 applied = msg.value > remaining ? remaining : msg.value;
-        uint256 refund = msg.value - applied;
+        uint256 applied = amount > remaining ? remaining : amount;
 
         inv.repaidAmount += applied;
 
@@ -162,23 +181,15 @@ contract InvoiceEscrow is Ownable {
             collateralToReturn = inv.collateral;
             inv.collateral = 0;
         }
+        emit InvoiceRepaid(id, applied, fullyRepaid);
 
         // Interactions last (state above is already final for this call).
-        fiadoScoring.repayFiado(inv.bodega, inv.customer, applied);
-
-        (bool sentToBodega,) = payable(inv.bodega).call{value: applied}("");
-        require(sentToBodega, "transfer to bodega failed");
+        stablecoin.safeTransferFrom(msg.sender, inv.bodega, applied);
+        fiadoScoring.repayFiado(inv.bodega, inv.customer, _toUsd18(applied));
 
         if (collateralToReturn > 0) {
-            (bool sentToCustomer,) = payable(inv.customer).call{value: collateralToReturn}("");
-            require(sentToCustomer, "collateral refund failed");
+            stablecoin.safeTransfer(inv.customer, collateralToReturn);
         }
-        if (refund > 0) {
-            (bool sentRefund,) = payable(msg.sender).call{value: refund}("");
-            require(sentRefund, "overpayment refund failed");
-        }
-
-        emit InvoiceRepaid(id, applied, fullyRepaid);
     }
 
     /// @notice Bodega claims the collateral after the due date passed with an outstanding
@@ -186,7 +197,7 @@ contract InvoiceEscrow is Ownable {
     /// still owed — records that amount as a FiadoScoring repayment (the bodega recovered that
     /// value, so the debt ledger reflects it), and returns any leftover collateral to the
     /// customer.
-    function claimCollateral(uint256 id) external {
+    function claimCollateral(uint256 id) external nonReentrant {
         Invoice storage inv = invoices[id];
         if (inv.bodega != msg.sender) revert NotInvoiceBodega();
         if (inv.status != Status.Active) revert InvalidState();
@@ -198,17 +209,14 @@ contract InvoiceEscrow is Ownable {
 
         inv.status = Status.Defaulted;
         inv.collateral = 0;
+        emit InvoiceDefaulted(id, claimed, refund);
 
         if (claimed > 0) {
-            fiadoScoring.repayFiado(inv.bodega, inv.customer, claimed);
-            (bool sentToBodega,) = payable(inv.bodega).call{value: claimed}("");
-            require(sentToBodega, "collateral claim transfer failed");
+            fiadoScoring.repayFiado(inv.bodega, inv.customer, _toUsd18(claimed));
+            stablecoin.safeTransfer(inv.bodega, claimed);
         }
         if (refund > 0) {
-            (bool sentToCustomer,) = payable(inv.customer).call{value: refund}("");
-            require(sentToCustomer, "collateral refund failed");
+            stablecoin.safeTransfer(inv.customer, refund);
         }
-
-        emit InvoiceDefaulted(id, claimed, refund);
     }
 }

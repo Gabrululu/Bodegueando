@@ -17,6 +17,11 @@
           "name": "_fiadoScoring",
           "type": "address",
           "internalType": "contract IFiadoScoring"
+        },
+        {
+          "name": "_stablecoin",
+          "type": "address",
+          "internalType": "contract IERC20"
         }
       ],
       "stateMutability": "nonpayable"
@@ -100,10 +105,15 @@
           "name": "bodega",
           "type": "address",
           "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
         }
       ],
       "outputs": [],
-      "stateMutability": "payable"
+      "stateMutability": "nonpayable"
     },
     {
       "type": "function",
@@ -126,10 +136,15 @@
           "name": "bodega",
           "type": "address",
           "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
         }
       ],
       "outputs": [],
-      "stateMutability": "payable"
+      "stateMutability": "nonpayable"
     },
     {
       "type": "function",
@@ -183,6 +198,32 @@
       ],
       "outputs": [],
       "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "stablecoin",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IERC20"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "stablecoinScale",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
     },
     {
       "type": "function",
@@ -340,7 +381,23 @@
     },
     {
       "type": "error",
+      "name": "SafeERC20FailedOperation",
+      "inputs": [
+        {
+          "name": "token",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
       "name": "UnknownBodega",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "UnsupportedDecimals",
       "inputs": []
     },
     {

@@ -1,529 +1,527 @@
-# Bodegueando — Arquitectura técnica
+# Bodegueando — Technical architecture
 
-Este documento cubre la arquitectura completa: qué existe, para qué existe cada pieza,
-direcciones desplegadas, tests, y cómo levantar y desplegar todo. Para la visión de producto
-— qué construimos, por qué Arbitrum, el problema que resuelve y su impacto — ver el
-[README](./README.md). Para un resumen de una sola página con diagrama, ver
+This document covers the full architecture: what exists, why each piece exists, deployed
+addresses, tests, and how to run and deploy everything. For the product vision — what we built,
+why Arbitrum, the problem it solves and its impact — see the [README](./README.md). For a
+one-page summary with a diagram (English / Spanish), see
 [gabrululu.github.io/Bodegueando](https://gabrululu.github.io/Bodegueando/) (`docs/index.html`,
-servido vía GitHub Pages).
+served via GitHub Pages).
 
-## Arquitectura
+A few Spanish terms are kept throughout because they're the product's own vocabulary:
+*bodega* (neighborhood corner store), *bodeguero* (shopkeeper), *fiado* (informal store credit —
+"put it on my tab"), and PUNTOS (the cashback points token).
+
+## Architecture
 
 ```
 bodegueando/
 ├── contracts/
-│   ├── solidity/                     # Foundry — PaymentRouter, PuntosToken, y el resto de contratos Solidity
+│   ├── solidity/                     # Foundry — PaymentRouter, PuntosToken and the rest of the Solidity contracts
 │   ├── stylus-fiado-scoring/         # Arbitrum Stylus (Rust) — FiadoScoring
-│   └── circom-credit-certificate/    # Circom/snarkjs — circuito ZK de CreditCertificate
+│   └── circom-credit-certificate/    # Circom/snarkjs — CreditCertificate ZK circuit
 └── frontend/                         # Next.js + Tailwind + wagmi/viem
 ```
 
-- **PaymentRouter.sol / PuntosToken.sol** (Solidity/Foundry): reciben el pago de un
-  cliente hacia una bodega, otorgan cashback en `PUNTOS` (ERC-20), y registran el pago
-  en `FiadoScoring`. También expone `payFiado`, para que un cliente pague de vuelta una
-  deuda de fiado (sin cashback, porque no es una compra nueva).
-- **FiadoScoring** (Rust/Stylus): mantiene un buffer acotado de los últimos pagos por
-  bodega y calcula un score/límite de crédito heurístico (promedio móvil de pagos,
-  frecuencia, penalización por mora) — el cómputo pesado que justifica usar Stylus en
-  vez de Solidity puro. También expone `updateScoreFromAi` para que el módulo de IA
-  del frontend pueda ajustar el score con una recomendación externa, y un libro de
-  deuda real por cliente (`extendFiado`/`repayFiado`) — ver "Fiado con libro de deuda
-  real" más abajo.
-- **Frontend** (Next.js): conecta ambos contratos vía wagmi/viem. La ruta
-  `app/api/fiado-score/route.ts` lee el historial on-chain de una bodega, llama a la
-  API de Anthropic (Claude) para obtener una recomendación de score/límite, y la
-  escribe de vuelta on-chain.
+- **PaymentRouter.sol / PuntosToken.sol** (Solidity/Foundry): take a customer's payment to a
+  bodega in USDG, grant cashback in `PUNTOS` (ERC-20), and record the payment in
+  `FiadoScoring`. It also exposes `payFiado`, so a customer can pay back a fiado debt (no
+  cashback, since it isn't a new purchase).
+- **FiadoScoring** (Rust/Stylus): keeps a bounded buffer of each bodega's latest payments and
+  computes a heuristic credit score/limit (moving average of payments, frequency, late-payment
+  penalty) — the heavy computation that justifies Stylus over plain Solidity. It also exposes
+  `updateScoreFromAi` so the frontend's AI module can adjust the score with an external
+  recommendation, and a real per-customer debt ledger (`extendFiado`/`repayFiado`) — see "Fiado
+  with a real debt ledger" below.
+- **Frontend** (Next.js): connects to the contracts via wagmi/viem. The
+  `app/api/fiado-score/route.ts` route reads a bodega's on-chain history, calls the Anthropic
+  API (Claude) for a score/limit recommendation, and writes it back on-chain.
 
-## Contratos desplegados (Arbitrum Sepolia)
+## Deployed contracts (Arbitrum Sepolia)
 
-| Contrato | Dirección | Arbiscan |
+| Contract | Address | Arbiscan |
 |---|---|---|
-| **FiadoScoring** (Stylus/Rust) | `0x22FD7ED957b356dcF4a93574D24fC724736480B2` | [ver / verificado](https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2) |
-| **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [ver código verificado](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
-| **PaymentRouter** | `0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F` | [ver código verificado](https://sepolia.arbiscan.io/address/0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F#code) |
-| **PuntosPaymaster** | `0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403` | [ver código verificado](https://sepolia.arbiscan.io/address/0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403#code) |
-| **BeneficioToken** (PoC programas sociales) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [ver código verificado](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
-| **InvoiceEscrow** (fiado con garantía parcial) | `0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4` | [ver código verificado](https://sepolia.arbiscan.io/address/0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4#code) |
-| **RewardsCatalog** (catálogo de beneficios) | `0x0c07b1b63aAbAD36d15877D80f10411534C44a2f` | [ver código verificado](https://sepolia.arbiscan.io/address/0x0c07b1b63aAbAD36d15877D80f10411534C44a2f#code) |
-| **GroupOrders** (compras conjuntas entre bodegas) | `0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0` | [ver código verificado](https://sepolia.arbiscan.io/address/0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0#code) |
-| **CreditCertificate** | `0xc42547586FbEfCA3D8EA189B1e87a2c234f67828` | [ver código verificado](https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code) |
-| **Groth16Verifier** (verificador ZK, autogenerado) | `0x6a61e780f9a811eA28718146A9B2F720C19359fb` | [ver código verificado](https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code) |
-| **CreditLine** | `0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29` | [ver código verificado](https://sepolia.arbiscan.io/address/0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29#code) |
+| **FiadoScoring** (Stylus/Rust) | `0x22FD7ED957b356dcF4a93574D24fC724736480B2` | [view / verified](https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2) |
+| **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [view verified code](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
+| **PaymentRouter** | `0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F` | [view verified code](https://sepolia.arbiscan.io/address/0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F#code) |
+| **PuntosPaymaster** | `0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403` | [view verified code](https://sepolia.arbiscan.io/address/0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403#code) |
+| **BeneficioToken** (social programs PoC) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [view verified code](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
+| **InvoiceEscrow** (fiado with partial collateral) | `0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4` | [view verified code](https://sepolia.arbiscan.io/address/0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4#code) |
+| **RewardsCatalog** (rewards catalog) | `0x0c07b1b63aAbAD36d15877D80f10411534C44a2f` | [view verified code](https://sepolia.arbiscan.io/address/0x0c07b1b63aAbAD36d15877D80f10411534C44a2f#code) |
+| **GroupOrders** (joint purchases between bodegas) | `0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0` | [view verified code](https://sepolia.arbiscan.io/address/0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0#code) |
+| **CreditCertificate** | `0xc42547586FbEfCA3D8EA189B1e87a2c234f67828` | [view verified code](https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code) |
+| **Groth16Verifier** (ZK verifier, auto-generated) | `0x6a61e780f9a811eA28718146A9B2F720C19359fb` | [view verified code](https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code) |
+| **CreditLine** | `0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29` | [view verified code](https://sepolia.arbiscan.io/address/0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29#code) |
 
-Cada contrato que depende de saber quién es una bodega registrada (`InvoiceEscrow`,
-`RewardsCatalog`, `GroupOrders`, `CreditLine`, `BeneficioToken`, `PuntosPaymaster`) referencia
-a `PaymentRouter` como una dirección actualizable (`Ownable` + `setBodegaRegistry`, o
-`setFiadoScoring`/`setEscrow` en el caso de `FiadoScoring`) en vez de `immutable` — el registro
-de bodegas es responsabilidad exclusiva de `PaymentRouter`, y cualquier contrato que lo consulta
-puede repuntarse a una instancia nueva sin perder su propia lógica ni redesplegarse él mismo.
+> These are the pre-USDG deployments, settling in testnet ETH. `PaymentRouter`,
+> `PuntosPaymaster`, `InvoiceEscrow`, `GroupOrders` and `CreditLine` are being redeployed in
+> their USDG versions with `script/DeployUsdgStack.s.sol` (see "USDG payments" and "Deploying
+> the USDG stack"); this table will be updated with the new addresses.
 
-`PuntosToken`, `PaymentRouter`, `PuntosPaymaster` y `BeneficioToken` están verificados con
-código fuente Solidity legible en Arbiscan (`forge verify-contract`). `FiadoScoring` está
-verificado con `cargo stylus verify` — no muestra código fuente como Etherscan, pero prueba que
-el bytecode desplegado corresponde a un build reproducible de `src/lib.rs` dentro del
-contenedor Docker oficial de cargo-stylus.
+Every contract that needs to know who is a registered bodega (`InvoiceEscrow`,
+`RewardsCatalog`, `GroupOrders`, `CreditLine`, `BeneficioToken`, `PuntosPaymaster`) references
+`PaymentRouter` as an updatable address (`Ownable` + `setBodegaRegistry`, or
+`setFiadoScoring`/`setEscrow` in `FiadoScoring`'s case) rather than `immutable` — the bodega
+registry is solely `PaymentRouter`'s responsibility, and any contract that queries it can be
+repointed to a new instance without losing its own logic or being redeployed itself.
 
-## Demo end-to-end
+`PuntosToken`, `PaymentRouter`, `PuntosPaymaster` and `BeneficioToken` are verified with
+readable Solidity source on Arbiscan (`forge verify-contract`). `FiadoScoring` is verified with
+`cargo stylus verify` — it doesn't show source code like Etherscan, but it proves the deployed
+bytecode matches a reproducible build of `src/lib.rs` inside cargo-stylus's official Docker
+container.
 
-Dos vistas separadas, no una pantalla única que muestra u oculta secciones:
+## End-to-end demo
 
-- **`BuyerPanel.tsx`** (comprador): buscar una bodega por su código, ver su fiado
-  disponible si lo activó (solo lectura) y pagarle vía `PaymentRouter.receivePayment`.
-  También muestra su propio código (para que una bodega le fíe a él) y, si tiene una
-  deuda de fiado con la bodega que está mirando (`FiadoScoring.getFiadoDebt`), un
-  botón para pagarla vía `PaymentRouter.payFiado`.
-- **`BodegaOwnerPanel.tsx`** (bodeguero): su propio código para compartir con
-  clientes, el interruptor de fiado (`setFiadoEnabled`), un botón para recalcular
-  su fiado con IA (`/api/fiado-score`) — esto ya no lo puede disparar un comprador —
-  y un formulario para fiarle a un cliente específico por su código
-  (`FiadoScoring.extendFiado`), con la deuda total pendiente de cobro y el espacio
-  disponible para seguir fiando.
+Two separate views, not a single screen that shows or hides sections:
 
-`app/app/page.tsx` detecta el rol después del login leyendo
-`PaymentRouter.isBodega(direcciónDeLaSmartAccount)` — una cuenta ya registrada como bodega va
-directo a `BodegaOwnerPanel`; una cuenta nueva elige explícitamente "Soy bodeguero" / "Soy
-cliente" (ver "Bodeguero y cliente son dos espacios separados" más abajo para el detalle
-completo de esta separación).
+- **`BuyerPanel.tsx`** (buyer): look up a bodega by its code, see its available fiado if it
+  turned it on (read-only) and pay it via `PaymentRouter.receivePayment`. It also shows the
+  buyer's own code (so a bodega can extend them credit) and, if they owe fiado to the bodega
+  they're looking at (`FiadoScoring.getFiadoDebt`), a button to pay it via
+  `PaymentRouter.payFiado`.
+- **`BodegaOwnerPanel.tsx`** (shopkeeper): their own code to share with customers, their
+  balance, the fiado switch (`setFiadoEnabled`), a button to recalculate their fiado with AI
+  (`/api/fiado-score`) — a buyer can no longer trigger this — and a form to extend credit to a
+  specific customer by their code (`FiadoScoring.extendFiado`), with the total outstanding debt
+  and the remaining room to keep extending credit.
 
-**El fiado es opt-in por bodega, no automático.** En la vida real una bodega no
-siempre fía — es decisión del dueño ("hoy no se fía, mañana sí"). `fiado_enabled`
-en `FiadoScoring` arranca en `false` para todas las bodegas y solo la bodega misma
-puede prenderlo (`setFiadoEnabled`, escrito por `msg.sender`, sin lista de permisos
-aparte, cada quien controla únicamente su propio fiado). El historial de pagos y el
-score se siguen calculando siempre — así una bodega ya tiene track record el día que
-decide activarlo. Mientras está apagado, el cliente no ve nada de fiado en la app,
-solo puede pagar.
+`app/app/page.tsx` detects the role after login by reading
+`PaymentRouter.isBodega(smartAccountAddress)` — an account already registered as a bodega goes
+straight to `BodegaOwnerPanel`; a new account explicitly picks "I'm a shopkeeper" / "I'm a
+customer" (see "Shopkeeper and customer are two separate spaces" below for the full detail of
+this separation).
 
-La ruta de IA (`/api/fiado-score`, `claude-opus-5`, salida estructurada) lee el historial
-on-chain de una bodega y llama a `updateScoreFromAi` para escribir de vuelta una
-recomendación de score/límite — probada end-to-end contra Arbitrum Sepolia: Claude devolvió
-una recomendación más conservadora que la heurística ("*solo un pago no es historial
-suficiente*") y quedó confirmada on-chain.
+**Fiado is opt-in per bodega, not automatic.** In real life a bodega doesn't always extend
+credit — it's the owner's call ("no credit today, maybe tomorrow"). `fiado_enabled` in
+`FiadoScoring` starts as `false` for every bodega and only the bodega itself can turn it on
+(`setFiadoEnabled`, written by `msg.sender`, no separate allowlist — each one controls only its
+own fiado). Payment history and score keep being calculated regardless — so a bodega already has
+a track record the day it decides to turn it on. While it's off, the customer sees nothing about
+fiado in the app and can only pay.
 
-### Fiado con libro de deuda real: `extendFiado` / `repayFiado` / `payFiado`
+The AI route (`/api/fiado-score`, structured output) reads a bodega's on-chain history and calls
+`updateScoreFromAi` to write back a score/limit recommendation — tested end-to-end against
+Arbitrum Sepolia: Claude returned a more conservative recommendation than the heuristic ("*a
+single payment isn't enough history*") and it was confirmed on-chain.
 
-Hasta acá, `getCreditLimit` era solo un techo sugerido por bodega — nada registraba cuánto de
-ese fiado ya se le había dado a un cliente en concreto, ni si lo había pagado de vuelta.
-`FiadoScoring` ahora lleva ese libro de deuda real:
+### Fiado with a real debt ledger: `extendFiado` / `repayFiado` / `payFiado`
 
-- **`extendFiado(cliente, monto)`** — la bodega (`msg.sender`, mismo patrón que
-  `setFiadoEnabled`) le fía a un cliente específico. No mueve dinero: es la promesa de que el
-  cliente se lleva algo ahora y paga después. Falla si el fiado está apagado para esa bodega o
-  si supera el espacio disponible (`credit_limit - total_outstanding` de esa misma bodega).
-- **`repayFiado(bodega, cliente, monto)`** — restringida a `payment_router`, igual que
-  `recordPayment`, porque el ETH real ya se movió en `PaymentRouter.payFiado` antes de esta
-  llamada. Si el cliente paga de más, el descuento se limita a la deuda pendiente (sin
-  underflow ni revert).
-- **`PaymentRouter.payFiado(bodega)`** — función `payable`: el comprador manda el ETH
-  (equivalente a los soles que está pagando), se transfiere a la bodega igual que
-  `receivePayment`, pero **no** otorga cashback (pagar una deuda no es una compra nueva) y
-  llama a `repayFiado` en vez de `recordPayment`.
-- **`getFiadoDebt(bodega, cliente)`**, **`getAvailableFiado(bodega)`**,
-  **`getTotalOutstanding(bodega)`** — nuevas vistas que usa el frontend: `BodegaOwnerPanel`
-  muestra cuánto fiado ya dio (pendiente de cobro) y cuánto espacio le queda, y le permite
-  fiarle a un cliente por su código de 6 dígitos; `BuyerPanel` muestra su propio código (mismo
-  sistema de `lib/bodegaCodes.ts`, ya genérico por dirección — no hizo falta construir uno
-  nuevo) para dárselo a su bodega, y si tiene una deuda con la bodega que está mirando, puede
-  pagarla ahí mismo.
+Previously, `getCreditLimit` was only a suggested ceiling per bodega — nothing recorded how much
+of that credit had already been given to a specific customer, or whether they had paid it back.
+`FiadoScoring` now keeps that real debt ledger:
 
-Cubierto con tests unitarios en ambos contratos: `cargo test` (Rust, 6/6, incluyendo límite
-excedido, fiado apagado, y que solo `payment_router` puede llamar `repayFiado`) y
-`forge test` (Solidity, 17/17, incluyendo transferencia de fondos, ausencia de cashback, y
-sobrepago). Probado también en vivo en Arbitrum Sepolia con ETH real, incluyendo el camino de
-repago parcial seguido de repago total, liberando el espacio de crédito exactamente como
-debería.
+- **`extendFiado(customer, amount)`** — the bodega (`msg.sender`, same pattern as
+  `setFiadoEnabled`) extends credit to a specific customer. No money moves: it's the promise
+  that the customer takes something now and pays later. It fails if fiado is off for that bodega
+  or if it exceeds the available room (`credit_limit - total_outstanding` for that same bodega).
+- **`repayFiado(bodega, customer, amount)`** — restricted to `payment_router`, like
+  `recordPayment`, because the real money already moved in `PaymentRouter.payFiado` before this
+  call. If the customer overpays, the deduction is capped at the outstanding debt (no underflow,
+  no revert).
+- **`PaymentRouter.payFiado(bodega, amount)`** — the buyer pays in USDG (the equivalent of the
+  soles they're paying), which goes straight to the bodega just like `receivePayment`, but does
+  **not** grant cashback (paying a debt isn't a new purchase) and calls `repayFiado` instead of
+  `recordPayment`.
+- **`getFiadoDebt(bodega, customer)`**, **`getAvailableFiado(bodega)`**,
+  **`getTotalOutstanding(bodega)`** — new views used by the frontend: `BodegaOwnerPanel` shows
+  how much credit it has already given (outstanding) and how much room is left, and lets it extend
+  credit to a customer by their 6-digit code; `BuyerPanel` shows the buyer's own code (same
+  `lib/bodegaCodes.ts` system, already generic per address — no need to build a new one) to give
+  to their bodega, and if they owe the bodega they're looking at, they can pay it right there.
 
-### InvoiceEscrow — fiado con garantía parcial
+Covered by unit tests in both contracts: `cargo test` (Rust, 6/6 at the time, including limit
+exceeded, fiado off, and that only `payment_router` can call `repayFiado`) and `forge test`
+(Solidity, 17/17 at the time, including fund transfer, no cashback, and overpayment). Also tested
+live on Arbitrum Sepolia with real testnet ETH (before the USDG migration), including the path of
+a partial repayment followed by full repayment, freeing up the credit room exactly as it should.
 
-`extendFiado` es fiado 100% no garantizado: la bodega fía sin que el cliente deposite nada,
-limitado solo por su `credit_limit`. `InvoiceEscrow.sol` es una vía **adicional** (no
-reemplaza `extendFiado`) para montos donde una bodega prefiere pedir un depósito parcial en
-vez de fiar solo en base a confianza:
+### InvoiceEscrow — fiado with partial collateral
 
-- **`proposeInvoice(cliente, principal, garantía, vencimiento)`** — la bodega (verificada
-  contra `PaymentRouter.isBodega`) propone una factura. No mueve fondos ni deuda todavía.
-- **`acceptInvoice(id)`** (`payable`, `msg.value` = garantía exacta) — el cliente acepta y
-  deposita la garantía, que el contrato retiene. Atómicamente llama a la nueva
-  `FiadoScoring.extendFiadoFor(bodega, cliente, principal)`, así que esta deuda cuenta para
-  el mismo score/historial que el fiado sin garantía.
-- **`repayInvoice(id)`** (`payable`, pagos parciales permitidos) — reenvía el ETH a la bodega
-  y llama a `repayFiado`, igual que `PaymentRouter.payFiado`. Al llegar al principal completo,
-  devuelve toda la garantía al cliente.
-- **`claimCollateral(id)`** — pasado el vencimiento con saldo pendiente, la bodega reclama
-  `min(faltante, garantía)`, se descuenta de la deuda on-chain, y el sobrante (si queda) vuelve
-  al cliente.
+`extendFiado` is 100% unsecured credit: the bodega extends credit without the customer
+depositing anything, limited only by its `credit_limit`. `InvoiceEscrow.sol` is an **additional**
+path (it doesn't replace `extendFiado`) for amounts where a bodega prefers to ask for a partial
+deposit instead of extending credit on trust alone:
 
-Para que `extendFiadoFor` y el `repayFiado` que dispara `claimCollateral`/`repayInvoice`
-cuenten como llamadas confiables, `FiadoScoring` (Rust/Stylus) tiene una segunda dirección de
-confianza, `escrow` (seteable solo por su owner con `setEscrow`, mismo patrón que
-`payment_router`), y un método `extendFiadoFor(bodega, cliente, monto)` restringido a esa
-dirección — exactamente la misma lógica que `extendFiado`, solo que `bodega` es un parámetro
-en vez de `msg.sender`.
+- **`proposeInvoice(customer, principal, collateral, dueDate)`** — the bodega (checked against
+  `PaymentRouter.isBodega`) proposes an invoice. No funds or debt move yet.
+- **`acceptInvoice(id)`** — the customer accepts and deposits the collateral in USDG (with a
+  prior approve, in the same UserOperation), which the contract holds. It atomically calls
+  `FiadoScoring.extendFiadoFor(bodega, customer, principal)`, so this debt counts toward the same
+  score/history as unsecured fiado.
+- **`repayInvoice(id, amount)`** (partial payments allowed; it never pulls more than what's owed)
+  — sends the USDG straight to the bodega and calls `repayFiado`, just like
+  `PaymentRouter.payFiado`. Once the full principal is reached, it returns all the collateral to
+  the customer.
+- **`claimCollateral(id)`** — after the due date with an outstanding balance, the bodega claims
+  `min(shortfall, collateral)`, it's deducted from the on-chain debt, and any leftover goes back
+  to the customer.
 
-Cubierto con tests unitarios en ambos contratos: `cargo test` (Rust, 11/11, incluyendo que
-`extend_fiado_for`/`repay_fiado` solo aceptan al `escrow` configurado) y `forge test`
-(Solidity, 14/14 sobre `InvoiceEscrow` — propuesta/cancelación, garantía exacta, repago
-parcial vs. total, reclamo antes/después del vencimiento, reclamo acotado a la garantía
-disponible). Desplegado, verificado y probado en vivo en Arbitrum Sepolia encadenando
-propose → accept → repago parcial → reclamo acotado a la garantía disponible, con ETH real
-moviéndose entre bodega y cliente.
+For `extendFiadoFor` and the `repayFiado` triggered by `claimCollateral`/`repayInvoice` to count
+as trusted calls, `FiadoScoring` (Rust/Stylus) has a second trusted address, `escrow` (settable
+only by its owner via `setEscrow`, same pattern as `payment_router`), and an
+`extendFiadoFor(bodega, customer, amount)` method restricted to that address — exactly the same
+logic as `extendFiado`, except `bodega` is a parameter instead of `msg.sender`.
 
-### RewardsCatalog — catálogo de beneficios canjeables entre bodegas
+Covered by unit tests in both contracts: `cargo test` (Rust, 11/11, including that
+`extend_fiado_for`/`repay_fiado` only accept the configured `escrow`) and `forge test`
+(Solidity, 19/19 on `InvoiceEscrow` in its USDG version — proposal/cancellation, collateral
+pulled on accept, partial vs. full repayment, overpayment never pulled, claim before/after the
+due date, claim capped at the available collateral, and a fuzz test that the escrow never holds
+more than the active collateral). Deployed, verified and tested live on Arbitrum Sepolia (with
+testnet ETH, before the USDG migration) chaining propose → accept → partial repayment → claim
+capped at the available collateral, with real funds moving between bodega and customer.
 
-Hasta acá `PuntosToken` solo se ganaba como cashback y se gastaba en gas — no había forma de
-canjearlo por algo concreto. `RewardsCatalog.sol` agrega esa pieza: cada bodega arma su propio
-catálogo de beneficios, pagado en PUNTOS por cualquier cliente de la red, sin importar en qué
-bodega los ganó.
+### RewardsCatalog — rewards redeemable across bodegas
 
-- **`createReward(title, kind, pointCost, availableUntil, claimWindowSeconds)`** — cualquier
-  bodega registrada en `PaymentRouter` publica un beneficio propio. `kind` es `Instant` (ej.
-  "1kg de arroz") o `Raffle` (ej. "canasta navideña"). La bodega decide dos ventanas de tiempo
-  independientes: `availableUntil` (hasta cuándo se ofrece/se puede seguir participando) y
-  `claimWindowSeconds` (cuánto dura el código de canje una vez generado — no es un fijo de
-  15 minutos, cada bodega elige el suyo por beneficio).
-- **`redeemInstant(id)`** — el cliente paga `pointCost` PUNTOS (transferidos directo a la
-  bodega, no se queman) y recibe un código de 6 dígitos de una sola vez, válido por
-  `claimWindowSeconds`.
-- **`enterRaffle(id)`** — paga `pointCost` por cada entrada; puede entrar más de una vez para
-  más chances. **`drawWinner(id)`** — solo la bodega dueña, solo después de `availableUntil`:
-  elige un ganador con `keccak256(blockhash, timestamp, id)` (aleatoriedad on-chain acotada,
-  manipulable en un grado limitado por quien propone el bloque — aceptable para un sorteo de
-  bajo valor, no amerita un oráculo VRF externo) y le genera su propio código de canje.
-- **`fulfillRedemption(code)`** — la bodega dueña del beneficio valida en el mostrador el
-  código que le muestra el cliente y lo marca entregado. Los PUNTOS ya se cobraron al
-  participar, así que esta función solo cambia estado, nunca mueve fondos — nadie puede
-  "reservar" sin comprometerse.
+Until then `PuntosToken` could only be earned as cashback and spent on gas — there was no way to
+redeem it for something concrete. `RewardsCatalog.sol` adds that piece: each bodega builds its
+own rewards catalog, paid in PUNTOS by any customer in the network, regardless of which bodega
+they earned them at.
 
-`PuntosToken` es un ERC-20 estándar sin restricciones de transferencia, así que
-`approve`+`transferFrom` funcionan sin modificarlo. El `approve` hacia `RewardsCatalog` se
-batchea junto con el canje en un solo `UserOperation` (`sendAndWait`,
-`frontend/lib/smartAccount.ts`), igual que ya hace ese mismo helper con el `approve` del
-paymaster — una sola firma, sin pasos extra para quien no sabe qué es un "approve".
+- **`createReward(title, kind, pointCost, availableUntil, claimWindowSeconds)`** — any bodega
+  registered in `PaymentRouter` publishes its own reward. `kind` is `Instant` (e.g. "1kg of
+  rice") or `Raffle` (e.g. "Christmas basket"). The bodega sets two independent time windows:
+  `availableUntil` (until when it's offered / entries are accepted) and `claimWindowSeconds` (how
+  long the redemption code lasts once generated — not a fixed 15 minutes, each bodega chooses its
+  own per reward).
+- **`redeemInstant(id)`** — the customer pays `pointCost` PUNTOS (transferred straight to the
+  bodega, not burned) and receives a one-time 6-digit code, valid for `claimWindowSeconds`.
+- **`enterRaffle(id)`** — pays `pointCost` per entry; they can enter more than once for more
+  chances. **`drawWinner(id)`** — only the owning bodega, only after `availableUntil`: picks a
+  winner with `keccak256(blockhash, timestamp, id)` (bounded on-chain randomness, manipulable to
+  a limited degree by the block proposer — acceptable for a low-value raffle, it doesn't warrant
+  an external VRF oracle) and generates the winner's own redemption code.
+- **`fulfillRedemption(code)`** — the bodega that owns the reward validates at the counter the
+  code the customer shows and marks it delivered. The PUNTOS were already charged on entry, so
+  this function only changes state and never moves funds — nobody can "reserve" without
+  committing.
 
-Cubierto con 23 tests unitarios nuevos en Foundry (creación gateada a bodegas registradas,
-cobro y generación de código en `redeemInstant`, código vencido/ya usado/de otra bodega
-rechazados, entradas de sorteo acumulables, `drawWinner` fallando antes de tiempo y sin
-participantes, pausa de beneficios) — 66/66 en todo el repo, sin romper nada existente.
-Desplegado, verificado y probado en vivo en Arbitrum Sepolia: canje instantáneo y sorteo con
-ganador real, ambos pagados con PUNTOS ganados por un pago real (no minteados a mano) y
-validados en el mostrador.
+`PuntosToken` is a standard ERC-20 with no transfer restrictions, so `approve`+`transferFrom`
+work without modifying it. The `approve` to `RewardsCatalog` is batched with the redemption in a
+single `UserOperation` (`sendAndWait`, `frontend/lib/smartAccount.ts`), just like that same helper
+already does with the paymaster `approve` — a single signature, no extra steps for someone who
+doesn't know what an "approve" is. Since 1 PUNTO is worth 1 USD of cashback, the UI always shows
+a reward's cost next to its value in soles.
 
-### GroupOrders — compras conjuntas entre bodegas
+Covered by 23 new Foundry unit tests (creation gated to registered bodegas, charging and code
+generation in `redeemInstant`, expired/already used/other-bodega codes rejected, accumulating
+raffle entries, `drawWinner` failing too early and with no participants, pausing rewards) — 66/66
+across the repo at the time, without breaking anything existing. Deployed, verified and tested
+live on Arbitrum Sepolia: an instant redemption and a raffle with a real winner, both paid with
+PUNTOS earned through a real payment (not minted by hand) and validated at the counter.
 
-Última pieza del roadmap que era puramente técnica (no bloqueada por un tercero como Meta o
-un emisor regulado): una bodega alejada suele perder ventas porque el distribuidor no llega
-hasta ella, o porque el pedido mínimo que exige es más de lo que una sola bodega necesita.
-`GroupOrders.sol` deja que varias bodegas junten demanda hasta ese mínimo — bodega↔bodega,
-a diferencia de `InvoiceEscrow`/`RewardsCatalog` que son bodega↔cliente, así que esto solo
-vive en `BodegaOwnerPanel.tsx`, nada en `BuyerPanel.tsx`.
+### GroupOrders — joint purchases between bodegas
 
-- **`createGroupOrder(title, goal, pledgeDeadline, withdrawWindowSeconds)`** — cualquier
-  bodega registrada organiza un pedido grupal con una meta en ETH (stand-in de eSol, igual
-  que el resto de la app), hasta cuándo se puede aportar, y cuánto plazo de gracia tiene ella
-  misma para retirar una vez alcanzada la meta.
-- **`pledge(id)`** (`payable`) — cualquier bodega registrada aporta antes del cierre. Queda
-  registrado por bodega (no anónimo) — ese registro es lo que se usa fuera de la cadena para
-  repartir la mercadería proporcionalmente a lo que aportó cada una.
-- **`withdraw(id)`** — solo la organizadora, solo si ya cerró el período de aportes, se
-  alcanzó la meta, y todavía está dentro del plazo de gracia. Se lleva el fondo completo para
-  comprarle al distribuidor en la vida real (el distribuidor no es un actor on-chain).
-- **`refund(id)`** — cualquier bodega que aportó reclama su parte de vuelta si el pedido nunca
-  alcanzó la meta, o si la alcanzó pero la organizadora dejó vencer el plazo de gracia sin
-  retirar — el fondo nunca queda atrapado para siempre.
+The last roadmap piece that was purely technical (not blocked on a third party like Meta or a
+regulated issuer): a remote bodega often loses sales because the distributor doesn't reach it, or
+because the minimum order it requires is more than a single bodega needs. `GroupOrders.sol` lets
+several bodegas pool demand up to that minimum — bodega↔bodega, unlike
+`InvoiceEscrow`/`RewardsCatalog` which are bodega↔customer, so this lives only in
+`BodegaOwnerPanel.tsx`, nothing in `BuyerPanel.tsx`.
 
-**Filtro por cercanía (frontend, no en el contrato).** Un pedido grupal solo tiene sentido
-entre bodegas realmente cerca — alguien tiene que ir a recoger la mercadería a un único punto
-de entrega, así que juntar demanda con una bodega de otro distrito no resuelve nada. El
-contrato en sí sigue sin ningún concepto de ubicación a propósito (mismo criterio que el resto
-del proyecto: la ubicación de una bodega es metadata de UX, no algo que necesite ser
-trustless, así que vive fuera de la cadena — ver "Mapa de bodegas cercanas" más abajo). El
-filtro se resuelve enteramente en `BodegaOwnerPanel.tsx`, reusando esa misma ubicación:
+- **`createGroupOrder(title, goal, pledgeDeadline, withdrawWindowSeconds)`** — any registered
+  bodega organizes a group order with a goal in USDG (like the rest of the app), a deadline for
+  pledges, and how long a grace period it has itself to withdraw once the goal is reached.
+- **`pledge(id, amount)`** — any registered bodega pledges USDG before the deadline. It's
+  recorded per bodega (not anonymous) — that record is what's used off-chain to split the goods in
+  proportion to what each one contributed.
+- **`withdraw(id)`** — only the organizer, only once the pledge period has closed, the goal was
+  reached, and it's still within the grace period. It takes the whole pool to buy from the
+  distributor in real life (the distributor isn't an on-chain actor).
+- **`refund(id)`** — any bodega that pledged claims its share back if the order never reached its
+  goal, or if it did but the organizer let the grace period expire without withdrawing — the
+  funds are never stuck forever.
 
-- Al listar pedidos, cada uno se cruza con la ubicación guardada de su organizadora
-  (`GET /api/bodega/location`, la misma fuente que alimenta el mapa) y se calcula la distancia
-  a la bodega que está mirando la lista (`lib/distance.ts`, fórmula de Haversine — no hace
-  falta precisión de rutas reales para esto).
-- Un selector de radio (1 km / 2 km / 5 km / Todos, por defecto 2 km — la escala de "misma
-  urbanización" que motivó este filtro) determina qué se muestra como "cerca de ti".
-- Si la propia bodega todavía no guardó su ubicación, no hay desde dónde medir distancia —
-  en ese caso se muestra la lista completa sin filtrar, con un aviso invitando a guardarla, en
-  vez de esconder pedidos que sí podrían ser relevantes.
-- Los pedidos cuya organizadora no guardó ubicación quedan aparte, en una sección colapsada
-  ("bodegas sin ubicación registrada") — nunca mezclados silenciosamente en la lista de
-  "cercanos", porque no hay forma de saber si están cerca o no.
+**Proximity filter (frontend, not in the contract).** A group order only makes sense between
+bodegas that are actually close — someone has to pick up the goods at a single drop-off point, so
+pooling demand with a bodega from another district solves nothing. The contract itself
+deliberately has no concept of location (same criterion as the rest of the project: a bodega's
+location is UX metadata, not something that needs to be trustless, so it lives off-chain — see
+"Map of nearby bodegas" below). The filter is handled entirely in `BodegaOwnerPanel.tsx`, reusing
+that same location:
 
-Qué NO resuelve, a propósito: no modela unidades ni catálogo de productos (`goal` es un
-monto, no una cantidad de sacos de arroz — mismo criterio que `BeneficioToken.sol` para no
-simular un catálogo que no existe en el resto de la app). El filtro de cercanía es solo de
-descubrimiento (qué se muestra primero) — el contrato sigue aceptando un aporte de cualquier
-bodega registrada sin importar su distancia, así que no reemplaza el criterio humano de la
-organizadora al decidir a quién repartirle si alguien lejano igual aporta.
+- When listing orders, each one is matched with its organizer's saved location
+  (`GET /api/bodega/location`, the same source that feeds the map) and the distance to the bodega
+  viewing the list is computed (`lib/distance.ts`, Haversine formula — real-route precision isn't
+  needed for this).
+- A radius selector (1 km / 2 km / 5 km / All, 2 km by default — the "same neighborhood" scale
+  that motivated this filter) determines what is shown as "near you".
+- If the bodega itself hasn't saved its location yet, there's nowhere to measure distance from —
+  in that case the full unfiltered list is shown, with a notice inviting it to save it, instead of
+  hiding orders that could be relevant.
+- Orders whose organizer didn't save a location are kept apart, in a collapsed section ("bodegas
+  without a registered location") — never silently mixed into the "nearby" list, because there's
+  no way to know whether they're close or not.
 
-Cubierto con 19 tests unitarios nuevos en Foundry (creación/aporte gateados a bodegas
-registradas, retiro antes de tiempo/antes de meta/fuera de plazo revierten, retiro exitoso
-transfiere todo el fondo y bloquea reembolsos después, reembolso por meta no alcanzada,
-reembolso por plazo de gracia vencido sin retiro, doble reembolso revierte) — 85/85 en todo
-el repo. Desplegado, verificado y probado en vivo en Arbitrum Sepolia con los dos desenlaces
-posibles: meta alcanzada (la organizadora retira el fondo completo) y meta no alcanzada
-(las bodegas que aportaron recuperan exactamente lo suyo), con ETH real moviéndose entre
-tres cuentas distintas.
+What it deliberately does NOT solve: it doesn't model units or a product catalog (`goal` is an
+amount, not a number of sacks of rice — same criterion as `BeneficioToken.sol`, to avoid
+simulating a catalog that doesn't exist in the rest of the app). The proximity filter is only for
+discovery (what's shown first) — the contract still accepts a pledge from any registered bodega
+regardless of distance, so it doesn't replace the organizer's human judgment about whom to
+distribute to if someone far away pledges anyway.
 
-### CreditCertificate — certificado de crédito con Zero-Knowledge
+Covered by 20 Foundry unit tests in its USDG version (creation/pledge gated to registered
+bodegas, withdrawal too early/before the goal/after the window reverts, a successful withdrawal
+transfers the whole pool and blocks later refunds, refund when the goal isn't reached, refund
+when the grace period expires without withdrawal, double refund reverts). Deployed, verified and
+tested live on Arbitrum Sepolia (with testnet ETH, before the USDG migration) with both possible
+outcomes: goal reached (the organizer withdraws the whole pool) and goal not reached (the bodegas
+that pledged get exactly their share back), with real funds moving between three different
+accounts.
 
-Última pieza del roadmap: "score crediticio del bodeguero con Zero-Knowledge". Investigamos
-la fuente que motivó esto — el blog de investigación ZK de Offchain Labs (el equipo detrás
-de Arbitrum) — y vale aclarar qué encontramos ahí: es investigación a **nivel de protocolo**
-(cómo Arbitrum prueba su propia transición de estado con una arquitectura multi-prover que
-combina fraud proofs, ZK vía SP1/Succinct, y TEEs; WASM→RISC-V como ISA de entrega), no una
-guía de desarrollo de aplicaciones. No da nada directamente reusable para esto — lo que sí
-confirma es que un verificador Solidity estándar corre en Arbitrum exactamente igual que en
-cualquier chain EVM, sin nada especial que Arbitrum habilite o bloquee.
+### CreditCertificate — Zero-Knowledge credit certificate
 
-`FiadoScoring.getScore`/`getPaymentHistory` ya son públicos — cualquiera los puede leer sin
-ZK. El valor real de la prueba acá no es "ocultar datos que ya son públicos on-chain", son
-dos cosas concretas: (1) una **credencial verificable y portable** ("score ≥ 700" en vez de
-la cifra exacta) que un banco/proveedor puede validar en un click sin entender los contratos
-de Bodegueando, y (2) que esa misma credencial sea **consumible on-chain** — ver
-"CreditLine" más abajo.
+The last roadmap piece: "the shopkeeper's credit score with Zero-Knowledge". We looked into the
+source that motivated this — Offchain Labs' (the team behind Arbitrum) ZK research blog — and
+it's worth clarifying what we found there: it's **protocol-level** research (how Arbitrum proves
+its own state transition with a multi-prover architecture combining fraud proofs, ZK via
+SP1/Succinct, and TEEs; WASM→RISC-V as the delivery ISA), not an application development guide.
+It offers nothing directly reusable for this — what it does confirm is that a standard Solidity
+verifier runs on Arbitrum exactly as on any EVM chain, with nothing special that Arbitrum enables
+or blocks.
 
-**Stack**: Circom + snarkjs (Groth16) — nuevo subproyecto hermano de `contracts/solidity/`/
+`FiadoScoring.getScore`/`getPaymentHistory` are already public — anyone can read them without
+ZK. The real value of the proof here isn't "hiding data that's already public on-chain", it's two
+concrete things: (1) a **verifiable, portable credential** ("score ≥ 700" instead of the exact
+number) that a bank/supplier can validate in one click without understanding Bodegueando's
+contracts, and (2) that the same credential is **consumable on-chain** — see "CreditLine" below.
+
+**Stack**: Circom + snarkjs (Groth16) — a new sibling subproject of `contracts/solidity/` /
 `contracts/stylus-fiado-scoring/`: `contracts/circom-credit-certificate/`.
 
-- **El circuito** (`circuits/creditCertificate.circom`) recibe `score` y una firma EdDSA
-  privados, y `threshold`/`bodega`/pubkey-del-oráculo/`issuedAt` públicos. Usa templates ya
-  probados de `circomlib` (`Poseidon`, `EdDSAPoseidonVerifier`, `GreaterEqThan`) — nada de
-  criptografía hecha a mano. Prueba "el oráculo firmó `poseidon(bodega, score, issuedAt)` Y
-  `score >= threshold`" sin que `score` aparezca nunca en las señales públicas.
-- **Trusted setup**: reusa un archivo Powers of Tau ya publicado (ceremonia pública de
-  iden3/Hermez, estándar para circuitos chicos como este) en vez de correr una ceremonia
-  propia — la asunción de confianza real acá es el oráculo centralizado, no el setup.
-- **El oráculo ZK** (`frontend/lib/zkOracle.ts`) firma con una key EdDSA-BabyJubJub
-  (`ZK_ORACLE_PRIVATE_KEY`) — deliberadamente **distinta** de `ORACLE_PRIVATE_KEY` (que es
-  secp256k1, la curva de Ethereum, y no sirve para verificar barato dentro de un circuito).
-  `circomlibjs` firma con exactamente los mismos parámetros que el circuito verifica.
-- **`app/api/credit-certificate/attest`**: lee el score actual de `FiadoScoring` (ya
-  público) y, si supera el threshold pedido, firma la atestación — rechaza firmar si la
-  bodega tiene un default sin resolver en `CreditLine` (ver más abajo).
-- **`app/api/credit-certificate/prove`**: corre `snarkjs.groth16.fullProve` server-side (el
-  wasm + zkey pesan varios MB, no tiene sentido mandárselos al celular del bodeguero) y
-  devuelve la prueba ya formateada como el calldata que espera `submitCertificate`.
-- **`CreditCertificate.sol`** (`Ownable` — a diferencia de los contratos self-service del
-  resto del proyecto, acá sí hace falta un ancla de confianza admin-configurable para la
-  pubkey del oráculo): `submitCertificate` llama al verificador Groth16 autogenerado
-  (`CreditCertificateVerifier.sol`, `snarkjs zkey export solidityverifier`, sin editar a
-  mano), valida que la pubkey coincida con la configurada y que la atestación no sea vieja,
-  y guarda el certificado por 30 días. `getCertifiedThreshold(bodega)` es la vista que
-  `CreditLine.sol` (o cualquier verificador externo) consulta.
-- **`app/certificado/[address]`**: página pública de solo lectura, mismo patrón que
-  `/pagar/[code]` — un banco abre el link y ve "✅ Certificado válido: score ≥ 700, vence
-  el...", leyendo directo del contrato, sin wallet.
+- **The circuit** (`circuits/creditCertificate.circom`) takes a private `score` and EdDSA
+  signature, and a public `threshold`/`bodega`/oracle pubkey/`issuedAt`. It uses proven
+  `circomlib` templates (`Poseidon`, `EdDSAPoseidonVerifier`, `GreaterEqThan`) — no hand-rolled
+  cryptography. It proves "the oracle signed `poseidon(bodega, score, issuedAt)` AND
+  `score >= threshold`" without `score` ever appearing in the public signals.
+- **Trusted setup**: reuses an already-published Powers of Tau file (iden3/Hermez's public
+  ceremony, standard for small circuits like this one) instead of running its own ceremony — the
+  real trust assumption here is the centralized oracle, not the setup.
+- **The ZK oracle** (`frontend/lib/zkOracle.ts`) signs with an EdDSA-BabyJubJub key
+  (`ZK_ORACLE_PRIVATE_KEY`) — deliberately **different** from `ORACLE_PRIVATE_KEY` (which is
+  secp256k1, Ethereum's curve, and isn't cheap to verify inside a circuit). `circomlibjs` signs
+  with exactly the same parameters the circuit verifies.
+- **`app/api/credit-certificate/attest`**: reads the current score from `FiadoScoring` (already
+  public) and, if it meets the requested threshold, signs the attestation — it refuses to sign if
+  the bodega has an unresolved default in `CreditLine` (see below).
+- **`app/api/credit-certificate/prove`**: runs `snarkjs.groth16.fullProve` server-side (the wasm
+  + zkey weigh several MB, there's no point sending them to the shopkeeper's phone) and returns
+  the proof already formatted as the calldata `submitCertificate` expects.
+- **`CreditCertificate.sol`** (`Ownable` — unlike the project's self-service contracts, here an
+  admin-configurable trust anchor for the oracle pubkey is needed): `submitCertificate` calls the
+  auto-generated Groth16 verifier (`CreditCertificateVerifier.sol`,
+  `snarkjs zkey export solidityverifier`, not edited by hand), checks that the pubkey matches the
+  configured one and that the attestation isn't stale, and stores the certificate for 30 days.
+  `getCertifiedThreshold(bodega)` is the view that `CreditLine.sol` (or any external verifier)
+  queries.
+- **`app/certificado/[address]`**: a public read-only page, same pattern as `/pagar/[code]` — a
+  bank opens the link and sees "✅ Valid certificate: score ≥ 700, expires on...", read straight
+  from the contract, no wallet.
 
-Cubierto con: 3 tests del circuito completo (`contracts/circom-credit-certificate/test/`,
-proof real generada y verificada, sin exponer el score; score insuficiente y firma
-incorrecta no pueden generar prueba) y 9 tests Foundry para `CreditCertificate.sol` (con un
-verificador mock, ya que la matemática ZK ya está cubierta a nivel de circuito). Desplegado,
-verificado y probado en vivo en Arbitrum Sepolia: una prueba ZK real generada con
-`snarkjs.groth16.fullProve` contra el circuito compilado, enviada on-chain pidiendo probar
-"score ≥ 500" sobre un score real de 600 — `getCertifiedThreshold` devuelve `500`, el 600 real
-nunca aparece en ninguna señal pública ni en ningún evento.
+Covered by: 3 tests of the full circuit (`contracts/circom-credit-certificate/test/`, a real
+proof generated and verified without exposing the score; an insufficient score and a wrong
+signature can't generate a proof) and 9 Foundry tests for `CreditCertificate.sol` (with a mock
+verifier, since the ZK math is already covered at circuit level). Deployed, verified and tested
+live on Arbitrum Sepolia: a real ZK proof generated with `snarkjs.groth16.fullProve` against the
+compiled circuit, submitted on-chain asking to prove "score ≥ 500" over a real score of 600 —
+`getCertifiedThreshold` returns `500`, and the real 600 never appears in any public signal or
+event.
 
-### CreditLine — línea de crédito on-chain
+### CreditLine — on-chain credit line
 
-El certificado ZK no es solo para bancos externos: también es consumible **on-chain**. Una
-bodega con score certificado pide prestado de un pool compartido con **menos garantía
-cuanto mejor el score que probó** — mismo mecanismo de garantía parcial que
-`InvoiceEscrow.sol`, solo que acá el tamaño de la garantía lo decide el score certificado,
-no la bodega.
+The ZK certificate isn't only for external banks: it's also consumable **on-chain**. A bodega
+with a certified score borrows from a shared pool with **less collateral the better the score it
+proved** — the same partial-collateral mechanism as `InvoiceEscrow.sol`, except here the size of
+the collateral is decided by the certified score, not by the bodega.
 
-- **Pool compartido**: `deposit()`/`withdraw(shares)`, cualquiera puede prestar — patrón
-  vault simple (shares proporcionales al valor del pool), sin ERC-4626 completo.
-- **`borrow(amount)`**: solo bodegas registradas con certificado vigente. El % de garantía
-  lo determina el tier certificado (tabla fija: score≥900→15%, ≥700→30%, ≥500→50%).
-- **`repay(loanId)`**: principal + 5% de interés fijo (sin curva dinámica), de una sola vez;
-  devuelve la garantía, lo repagado vuelve al pool.
-- **`liquidate(loanId)`**: pasado el vencimiento sin repago, cualquiera puede ejecutarlo — la
-  garantía pasa al pool (compensa a los lenders) y queda registrado el default.
+- **Shared pool**: `deposit(amount)`/`withdraw(shares)`, anyone can lend — a simple vault pattern
+  (shares proportional to the pool's value), not full ERC-4626. Share value is based on
+  `totalAssets() = poolBalance + totalReceivable` (see "USDG payments" for why outstanding loans
+  and their fixed interest are counted).
+- **`borrow(amount)`**: only registered bodegas with a valid certificate. The collateral % is set
+  by the certified tier (fixed table: score≥900→15%, ≥700→30%, ≥500→50%); the collateral is pulled
+  in USDG and can be previewed with `requiredCollateral(bodega, amount)`.
+- **`repay(loanId)`**: principal + 5% fixed interest (no dynamic curve), all at once (see
+  `amountOwed(loanId)`); returns the collateral, and the repayment goes back to the pool.
+- **`liquidate(loanId)`**: after the due date without repayment, anyone can execute it — the
+  collateral goes to the pool (compensating lenders) and the default is recorded.
 
-Deliberadamente **no** es un protocolo de lending completo: sin curva de interés dinámica,
-sin oráculo de precio (todo en la misma moneda eSol/ETH, sin riesgo cross-asset), sin
-instalments. El default no toca `FiadoScoring` on-chain a propósito — acoplar un contrato más
-como caller autorizado ahí tiene un costo real (`FiadoScoring` es un contrato Stylus
-inmutable, así que agregar un caller nuevo obliga a redesplegarlo). En cambio,
-`attest/route.ts` bloquea certificados nuevos mientras haya un default sin resolver:
-consecuencia reputacional real, sin acoplar más contratos entre sí.
+It is deliberately **not** a full lending protocol: no dynamic interest curve, no price oracle
+(everything in the same currency, USDG, no cross-asset risk), no installments. The default
+deliberately doesn't touch `FiadoScoring` on-chain — coupling one more contract as an authorized
+caller there has a real cost (`FiadoScoring` is an immutable Stylus contract, so adding a new
+caller forces a redeploy — and new Stylus activations are currently paused, see "USDG payments").
+Instead, `attest/route.ts` blocks new certificates while there's an unresolved default: a real
+reputational consequence, without coupling more contracts together.
 
-Cubierto con 15 tests Foundry (tiers de garantía, retiro insuficiente de liquidez del pool,
-repago correcto/incorrecto, liquidación antes/después del vencimiento, doble resolución).
-Desplegado, verificado y probado en vivo en Arbitrum Sepolia: con un certificado ya on-chain,
-una bodega pidió prestado con el 50% de garantía del tier 500 (la mitad de lo que pediría sin
-certificado) y lo repagó completo — recuperó su garantía, y el cambio neto en su balance
-coincidió exactamente con lo esperado (`+garantía -deuda`).
+Covered by 21 Foundry tests in its USDG version (collateral tiers, withdrawal limited to the
+pool's liquidity, deposits while fully lent out, late depositors not diluting earned interest,
+donations not moving the share price, repayment, liquidation before/after the due date, double
+resolution, and a fuzz test of the pool's balance invariant). Deployed, verified and tested live on
+Arbitrum Sepolia (with testnet ETH, before the USDG migration): with a certificate already
+on-chain, a bodega borrowed with the tier-500 50% collateral (half of what it would need without
+a certificate) and repaid it in full — it got its collateral back, and the net change in its
+balance matched exactly what was expected (`+collateral -debt`).
 
-**109/109 tests en todo el repo** (Rust + Solidity + circuito).
+### On-chain circuit breaker for the AI oracle (tested live)
 
-### Circuit breaker on-chain para el oráculo de IA (probado en vivo)
+`app/api/fiado-score/route.ts` signs `updateScoreFromAi` with `ORACLE_PRIVATE_KEY`, a key that
+lives as an environment variable in the same process that serves the web app (see "Deliberate
+hackathon shortcuts" below — it's a documented hackathon shortcut, not a production choice). If
+that key leaked, there used to be no limit at all: whoever had it could set any bodega's fiado
+limit to a made-up number, with no real history behind it.
 
-`app/api/fiado-score/route.ts` firma `updateScoreFromAi` con `ORACLE_PRIVATE_KEY`, una clave
-que vive como variable de entorno en el mismo proceso que sirve la web (ver "Atajos
-conscientes de hackathon" más abajo — es un atajo de hackathon documentado, no una elección de
-producción). Si esa clave se filtra, antes no había ningún límite: quien la tuviera podía
-fijarle a cualquier bodega un límite de fiado inventado, sin ningún historial real detrás.
+`FiadoScoring` now bounds what the oracle can write: the limit it proposes can be at most twice
+what the on-chain heuristic itself (the same one that runs on every `record_payment`) would
+compute for that bodega right now. Lowering the limit (being more conservative than the
+heuristic) remains uncapped, because it's never a risk. The heuristic's math was extracted into
+`heuristic_score_and_limit`, a pure function shared by both `recompute_heuristic` (which already
+ran on every payment) and `update_score_from_ai` (the new validation) — there are no two
+calculations that could drift apart.
 
-`FiadoScoring` ahora acota lo que el oráculo puede escribir: el límite que proponga puede ser
-como máximo el doble de lo que el propio heurístico on-chain (el mismo que corre en cada
-`record_payment`) calcularía para esa bodega en este momento. Bajar el límite (ser más
-conservador que el heurístico) sigue sin tope, porque nunca es un riesgo. La matemática del
-heurístico se extrajo a `heuristic_score_and_limit`, una función pura que tanto
-`recompute_heuristic` (la que ya corría en cada pago) como `update_score_from_ai` (la
-validación nueva) comparten — no hay dos cálculos que puedan desincronizarse.
+Covered by 3 new/updated tests in `cargo test` (8/8 total at the time): a limit within 2× is
+accepted, one far above reverts with `AiLimitOutOfRange`, and lowering the limit remains free
+regardless of the heuristic. Also tested live on Arbitrum Sepolia: an attempt to set a limit far
+above the heuristic (with and without real history behind the bodega) reverts on-chain in both
+cases — not even with the oracle's key can credit be invented out of thin air, and the cap scales
+with real history instead of ignoring it.
 
-Cubierto con 3 tests nuevos/actualizados en `cargo test` (8/8 en total): que un límite dentro
-del 2× se acepta, que uno muy por encima revierte con `AiLimitOutOfRange`, y que bajar el
-límite sigue siendo libre sin importar el heurístico. Probado también en vivo en Arbitrum
-Sepolia: un intento de fijar un límite muy por encima del heurístico (con y sin historial real
-detrás de la bodega) revierte on-chain en ambos casos — ni con la clave del oráculo se puede
-inventar crédito de la nada, y el tope escala con el historial real en vez de ignorarlo.
+### `BeneficioToken.sol` — on-chain social programs PoC (Vaso de Leche, Qali Warma, Pensión 65)
 
-### `BeneficioToken.sol` — PoC de programas sociales on-chain (Vaso de Leche, Qali Warma, Pensión 65)
+The reason this makes sense in this project specifically, rather than as a generic feature bolted
+on top: no supermarket or pharmacy chain reaches every neighborhood where there is a bodega — that
+makes bodegas, without anyone designing it that way, the country's largest and closest last-mile
+network. `BeneficioToken` uses that real presence so a social program reaches whoever needs it
+directly, spendable only at their neighborhood bodega, with no intermediaries taking a cut along
+the way.
 
-La razón de que esto tenga sentido en este proyecto específicamente, no como un feature
-genérico pegado encima: ningún supermercado ni farmacia de cadena llega a todos los barrios
-donde sí hay una bodega — eso las convierte, sin que nadie lo haya diseñado así, en la red de
-última milla más grande y más cercana del país. `BeneficioToken` aprovecha esa presencia real
-para que un programa social llegue directo a quien lo necesita, gastable solo en la bodega de
-su barrio, sin intermediarios que se queden con una parte en el camino.
+Unlike `PuntosToken` (free, transferable between anyone), `BeneficioToken` is a restricted ERC-20:
+a beneficiary can only spend it by transferring it to a bodega already registered in
+`PaymentRouter` (never reselling it to someone else or exchanging it for cash), and each issuance
+expires `duration` seconds after being issued. The restriction lives in `_update`, the hook ERC20
+calls on *every* transfer (including `transferFrom`) — there's no way around it using another
+function of the token. One unit represents S/ 1 of benefit, and the app shows it as such.
 
-A diferencia de `PuntosToken` (libre, transferible entre cualquiera), `BeneficioToken` es un
-ERC-20 restringido: un beneficiario solo puede gastarlo transfiriéndolo a una bodega ya
-registrada en `PaymentRouter` (nunca revenderlo a otra persona ni cambiarlo por efectivo), y
-cada emisión vence a los `duration` segundos de emitida. La restricción vive en `_update`, el
-hook que ERC20 llama en *toda* transferencia (incluida `transferFrom`) — no hay forma de
-saltársela usando otra función del token.
+- **`issue(beneficiary, amount, duration)`** — only the `owner` (in a real integration, the
+  relevant municipality or ministry) can issue benefits.
+- **Normal `transfer`/`transferFrom`** — works as "redeem": if the recipient isn't a registered
+  bodega (`IBodegaRegistry.isBodega`, the same source of truth `PaymentRouter` already uses — there
+  is no second registry that could drift) or if the sender's benefit has expired, it reverts
+  (`NotABodega` / `BenefitExpired`).
 
-- **`issue(beneficiario, monto, duración)`** — solo el `owner` (en una integración real, la
-  municipalidad o el ministerio correspondiente) puede emitir beneficio.
-- **`transfer`/`transferFrom` normal** — funciona como "redimir": si el destino no es una
-  bodega registrada (`IBodegaRegistry.isBodega`, la misma fuente de verdad que ya usa
-  `PaymentRouter` — no hay un segundo registro que pueda desincronizarse) o si el beneficio del
-  emisor ya venció, revierte (`NotABodega` / `BenefitExpired`).
+**What this PoC deliberately does NOT solve:** it doesn't restrict the spending category ("food
+only") because the app has no product catalog — building one would be a separate project, not
+something this contract can honestly simulate. Nor does it reclaim expired balances back to the
+program (that would need an on-chain keeper); an expired benefit simply can no longer be spent and
+stays frozen in the wallet.
 
-**Qué NO resuelve esta PoC, a propósito:** no restringe la categoría del gasto ("solo
-alimentos") porque la app no tiene catálogo de productos — construirlo sería un proyecto
-aparte, no algo que este contrato pueda simular honestamente. Tampoco reclama solo el saldo
-vencido de vuelta al programa (necesitaría un keeper on-chain); el beneficio vencido
-simplemente deja de poder gastarse, se queda congelado en la wallet.
+Covered by 9 tests in `forge test` (26/26 across the repo at the time, without breaking anything
+existing): issuance only by the owner, expiry, valid spending at a registered bodega, an attempt to
+resell to another person (the case that justifies the whole contract) reverts, and that
+`transferFrom` (approving a third party) is subject to the same rules as a direct `transfer`.
 
-Cubierto con 9 tests en `forge test` (26/26 en todo el repo, sin romper nada existente):
-emisión solo por el owner, vencimiento, gasto válido a una bodega registrada, el intento de
-revender a otra persona (el caso que justifica todo el contrato) revierte, y que
-`transferFrom` (aprobar a un tercero) queda sujeto a las mismas reglas que `transfer` directo.
+**Deployed and verified on Arbitrum Sepolia**, with a minimal issuance UI connected to the same
+panel any bodega already uses (`BodegaOwnerPanel.tsx`) — not a separate dashboard:
 
-**Desplegado y verificado en Arbitrum Sepolia**, con una UI mínima de emisión conectada al
-mismo panel que ya usa cualquier bodega (`BodegaOwnerPanel.tsx`) — no un dashboard aparte:
+- **Who can issue, for real, not just in the UI.** `issue()` is `onlyOwner` — that was already
+  enforced on-chain from the original design. What's new is that the panel now *reads* that same
+  `owner()` (`useReadContract`, with no separate environment variable that could drift from the
+  contract) and only shows the "Admin panel — Social benefits" section to the matching account.
+  Nobody else sees it, and even if someone tampered with the frontend to force it to appear, the
+  call to `issue()` would still revert on-chain for any other account.
+- **The `owner` is the smart account of a real Privy-logged-in session, not the deployer
+  account.** Privy generates a *new smart account* per login — there's no way to "log in as" a
+  pre-existing external private key through the app's normal flow, so `BeneficioToken`'s `owner`
+  has to be that same smart account (computed by reproducing the same `toSimpleSmartAccount` that
+  `lib/smartAccount.ts` uses) so that whoever administers social programs sees the panel simply by
+  logging in normally, without extra steps or a separate account to remember.
+- **Why this doesn't touch fiado.** `extendFiado`/`setFiadoEnabled` remain deliberately
+  self-service and keyed on `msg.sender` — each bodega controls only its own fiado, with no
+  separate allowlist (see "Fiado with a real debt ledger" above). Adding an "Admin only" layer
+  there would reverse a decision already tested live, so the new admin panel is additive (it lives
+  on the same screen that already has fiado, as an extra section only an `owner` sees) rather than
+  restrictive on something that already worked.
 
-- **Quién puede emitir, de verdad, no solo en la UI.** `issue()` es `onlyOwner` — eso ya se
-  hacía cumplir on-chain desde el diseño original. Lo nuevo es que el panel ahora *lee* ese
-  mismo `owner()` (`useReadContract`, sin variable de entorno separada que pudiera
-  desincronizarse del contrato) y solo muestra la sección "Panel de administrador — Beneficios
-  sociales" a la cuenta que matchea. Nadie más la ve, y aunque alguien manipulara el frontend
-  para forzarla a aparecer, la llamada a `issue()` igual revertiría on-chain para cualquier
-  otra cuenta.
-- **El `owner` es la smart account de una sesión real logueada por Privy, no la cuenta
-  deployer.** Privy genera una *smart account nueva* por cada login — no existe una forma de
-  "iniciar sesión como" una clave privada externa preexistente a través del flujo normal de la
-  app, así que el `owner` de `BeneficioToken` tiene que ser esa misma smart account (calculada
-  reproduciendo el mismo `toSimpleSmartAccount` que usa `lib/smartAccount.ts`) para que quien
-  administra programas sociales vea el panel simplemente logueándose normal, sin pasos extra ni
-  una cuenta aparte que recordar.
-- **Por qué esto no toca el fiado.** `extendFiado`/`setFiadoEnabled` siguen siendo
-  deliberadamente self-service y `msg.sender`-keyed — cada bodega controla únicamente su
-  propio fiado, sin lista de permisos aparte (ver "Fiado con libro de deuda real" más arriba).
-  Sumarle una capa de "solo un Admin" ahí revertiría esa decisión ya probada en vivo, así que
-  el nuevo panel de administrador es aditivo (vive en la misma pantalla que ya tiene fiado,
-  como una sección extra que solo un `owner` ve) en vez de restrictivo sobre algo que ya
-  funcionaba.
+**Redemption UI, on the beneficiary's side (`BuyerPanel.tsx`).** There's no longer any need to
+leave the app to spend the benefit as a generic ERC-20 transfer: as soon as the customer has a
+`BeneficioToken` balance (`balanceOf > 0`), they see a separate card — apart from regular payment,
+never mixed with the normal "Pay" button — with their balance and expiry date. The payment itself
+(`transfer(bodega, amount)`) is enabled only once they've also typed a bodega's code, reusing the
+same code lookup they already use to pay or repay their fiado. Expiry isn't pre-validated in the
+frontend — if the benefit has already expired, the payment attempt reverts on-chain
+(`BenefitExpired`, see `_update` in `BeneficioToken.sol`) and a generic error is shown; the
+source of truth remains the contract, not a date calculation on the client.
 
-**UI de canje, del lado del beneficiario (`BuyerPanel.tsx`).** Ya no hace falta salir de la
-app para gastar el beneficio como una transferencia ERC-20 genérica: en cuanto el cliente
-tiene saldo de `BeneficioToken` (`balanceOf > 0`), ve una tarjeta aparte —separada del pago en
-efectivo, nunca mezclada con el botón "Pagar" normal— con su saldo y fecha de vencimiento. El
-pago mismo (`transfer(bodega, monto)`) se habilita recién cuando también escribió el código de
-una bodega, reusando el mismo buscador de código que ya usa para pagar en efectivo o pagar su
-fiado. No se pre-valida el vencimiento en el frontend — si el beneficio ya venció, el intento
-de pago revierte on-chain (`BenefitExpired`, ver `_update` en `BeneficioToken.sol`) y se
-muestra un error genérico; la fuente de verdad sigue siendo el contrato, no un cálculo de
-fecha en el cliente.
+**What's still missing:** the "redeem" UI is already built (see above) — there's nothing pending
+for `BeneficioToken` itself. What's next is roadmap outside this contract (see "Current MVP"
+below).
 
-**Qué sigue faltando:** UI de "canjear" ya construida (ver arriba) — no queda ningún pendiente
-de `BeneficioToken` en sí. Lo que sigue es roadmap fuera de este contrato (eSol, InvoiceEscrow,
-ver "MVP actual" más abajo).
+### The Telegram bot as a profile (tested live)
 
-### El bot de Telegram como perfil (probado en vivo)
+Neither the web app nor the bot ever shows "ETH", "USDG" or a `0x...` address to the shopkeeper
+or the buyer — everything is shown in soles, and linking with Telegram is done with a 6-digit
+code, not by pasting an address into the chat.
 
-Ni la web ni el bot muestran nunca "ETH" ni una dirección `0x...` al bodeguero o al
-comprador — todo se ve en soles, y la vinculación con Telegram se hace con un código
-de 6 dígitos, no pegando una dirección en el chat.
+**Webhook in production, not polling — Vercel can't run a daemon.** The first version used
+`scripts/telegram-bot.mjs`, a separate Node process calling `getUpdates` (long-polling)
+non-stop. That works on a laptop with a terminal open, but **it can't work on Vercel**: each
+serverless function responds once and shuts down, there's no way to leave a process listening
+forever. With that design, any message sent to the bot while the app was in production stayed
+unprocessed in Telegram's queue — confirmed by checking `getWebhookInfo`/`getUpdates` directly
+against the Telegram API.
 
-**Webhook en producción, no polling — Vercel no puede correr un daemon.** La primera versión
-de esto usaba `scripts/telegram-bot.mjs`, un proceso Node aparte haciendo `getUpdates`
-(long-polling) sin parar. Eso funciona en una laptop con una terminal abierta, pero **no
-puede funcionar en Vercel**: cada función serverless responde una vez y se apaga, no hay forma
-de dejar un proceso escuchando para siempre. Con ese diseño, cualquier mensaje mandado al bot
-mientras la app estaba en producción se quedaba sin procesar en la cola de Telegram — se
-confirmó así al revisar `getWebhookInfo`/`getUpdates` directo contra la API de Telegram.
+The fix is for Telegram to call one of our URLs instead of us asking it all the time — a webhook,
+which does fit Vercel's model (a function that responds to a single POST).
+`app/api/telegram/webhook/route.ts` plays that role; the business logic (which used to be split
+between the daemon and the routes it called) moved to `lib/telegramCommands.ts` (dispatching
+`/start`, `/vincular`, `/perfil`) and `lib/telegramProfile.ts` (building the `/perfil` text), so
+that the webhook and `GET /api/telegram/profile` (which still exists for the development daemon)
+share the same code instead of duplicating it. The `X-Telegram-Bot-Api-Secret-Token` header
+(compared against `TELEGRAM_WEBHOOK_SECRET`) rejects requests that don't really come from
+Telegram.
 
-La solución es que Telegram llame a una URL nuestra en vez de que nosotros le preguntemos todo
-el rato — un webhook, que sí encaja con el modelo de Vercel (una función que responde a un
-solo POST). `app/api/telegram/webhook/route.ts` cumple ese rol; la lógica de negocio (que
-antes vivía repartida entre el daemon y las rutas que llamaba) se movió a
-`lib/telegramCommands.ts` (despacho de `/start`, `/vincular`, `/perfil`) y
-`lib/telegramProfile.ts` (armado del texto de `/perfil`), para que el webhook y `GET
-/api/telegram/profile` (que sigue existiendo para el daemon de desarrollo) compartan el mismo
-código en vez de duplicarlo. El header `X-Telegram-Bot-Api-Secret-Token` (comparado contra
-`TELEGRAM_WEBHOOK_SECRET`) rechaza pedidos que no vengan realmente de Telegram.
+**Linking:**
+1. From `BodegaOwnerPanel.tsx` (or `BuyerPanel.tsx`, optional for buyers) the user requests a
+   code with "Generate my code" → `POST /api/telegram/generate-code` stores
+   `{code → address}` in memory (expires after 10 minutes, single use).
+2. A button opens `t.me/<bot>?start=<code>`. It uses the `/start`-with-payload mechanism, *not*
+   `?text=/vincular <code>` — tested live that the latter is unreliable: since `/vincular` is
+   already registered as a bot command, the Telegram client sometimes recognizes it and sends it
+   on its own, cutting off the code before the user can complete it. `?start=` is the mechanism
+   Telegram designed exactly for this case (a deep link with a parameter) and it always arrives
+   intact.
+3. The webhook receives `/start <code>` and calls the same logic as `/vincular <code>`, which
+   stores `chat_id → address` via `lib/kv.ts` (Upstash Redis in production,
+   `frontend/.data/telegram-links.json` in local development — see "Storage: Upstash Redis in
+   production" below).
+4. The web app polls `GET /api/telegram/status` until it sees the link confirmed.
 
-**Vinculación:**
-1. Desde `BodegaOwnerPanel.tsx` (o `BuyerPanel.tsx`, opcional para el comprador) se
-   pide un código con "Generar mi código" → `POST /api/telegram/generate-code` guarda
-   `{código → dirección}` en memoria (vence a los 10 minutos, un solo uso).
-2. Un botón abre `t.me/<bot>?start=<código>`. Se usa el mecanismo de `/start` con payload,
-   *no* `?text=/vincular <código>` — probado en vivo que ese segundo formato es poco confiable:
-   como `/vincular` ya está registrado como comando del bot, el cliente de Telegram a veces lo
-   reconoce y lo manda solo, cortando el código antes de que el usuario pueda completarlo.
-   `?start=` es el mecanismo que Telegram diseñó exactamente para este caso (deep link con un
-   parámetro) y siempre llega completo.
-3. El webhook recibe `/start <código>` y llama a la misma lógica que `/vincular <código>`,
-   que guarda `chat_id → dirección` vía `lib/kv.ts` (Upstash Redis en producción,
-   `frontend/.data/telegram-links.json` en desarrollo local — ver "Storage: Upstash Redis en
-   producción" más abajo).
-4. La web hace poll de `GET /api/telegram/status` hasta ver el link confirmado.
+**Profile by chat:** once linked, anyone — shopkeeper or buyer — can send `/perfil` to the bot at
+any time, not just receive push alerts. It reads `PaymentRouter.isBodega` to decide the role and
+builds the reply:
 
-**Perfil por chat:** una vez vinculado, cualquiera —bodeguero o comprador— puede
-escribirle `/perfil` al bot en cualquier momento, no solo recibir avisos push. Lee
-`PaymentRouter.isBodega` para decidir el rol y arma la respuesta:
+- **Bodega:** payments received, trust level and how much fiado it offers (in soles).
+- **Buyer:** accumulated cashback points (converted to soles).
 
-- **Bodega:** pagos recibidos, nivel de confianza y cuánto fiado ofrece (en soles).
-- **Comprador:** puntos de cashback acumulados (convertidos a soles).
-
-**Registrar el webhook** (una sola vez, después de desplegar el código de
-`app/api/telegram/webhook`):
+**Registering the webhook** (once, after deploying the `app/api/telegram/webhook` code):
 
 ```bash
 curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://<tu-dominio>/api/telegram/webhook", "secret_token": "<TELEGRAM_WEBHOOK_SECRET>"}'
+  -d '{"url": "https://<your-domain>/api/telegram/webhook", "secret_token": "<TELEGRAM_WEBHOOK_SECRET>"}'
 ```
 
-**Desarrollo local:** sin una URL pública HTTPS, Telegram no puede llamar al webhook, así que
-en local se sigue usando el daemon de polling (`scripts/telegram-bot.mjs`, sin secreto, sin
-webhook), corriendo aparte de `pnpm run dev`:
+**Local development:** without a public HTTPS URL Telegram can't call the webhook, so locally the
+polling daemon is still used (`scripts/telegram-bot.mjs`, no secret, no webhook), running
+separately from `pnpm run dev`:
 
 ```bash
 cd frontend
 pnpm run bot
 ```
 
-**Lista de comandos para @BotFather** (`/setcommands` → elegir el bot → pegar tal cual):
+**Command list for @BotFather** (`/setcommands` → pick the bot → paste as-is; the bot speaks
+Spanish to its users):
 
 ```
 start - Ver cómo vincular tu cuenta de Bodegueando
@@ -531,472 +529,524 @@ vincular - Vincular tu cuenta con tu código de 6 dígitos (ej. /vincular 123456
 perfil - Ver tus pagos, puntos o fiado
 ```
 
-Probado en vivo de punta a punta contra [@bodegueandobot](https://t.me/bodegueandobot): código
-generado y vinculado, `/perfil` respondiendo con montos en soles (nunca ETH), y un pago real
-notificado al instante por Telegram apenas se confirma on-chain.
+Tested live end-to-end against [@bodegueandobot](https://t.me/bodegueandobot): code generated and
+linked, `/perfil` replying with amounts in soles (never ETH), and a real payment notified
+instantly on Telegram as soon as it's confirmed on-chain.
 
-### Storage: Upstash Redis en producción, archivo local en desarrollo
+### Storage: Upstash Redis in production, local file in development
 
-El filesystem de Vercel es efímero por invocación — dos requests al mismo endpoint pueden
-correr en instancias serverless distintas que nunca vieron lo que la otra escribió. Con la app
-ya desplegada en `bodegueando.vercel.app`, los dos stores que antes eran solo un JSON en
-`frontend/.data/` (`getOrCreateCode`/`resolveCode` de códigos de bodega/cliente, y el mapeo
-`chat_id ↔ dirección` de Telegram) corrían un riesgo real de comportarse de forma
-inconsistente en producción — no un problema teórico, sino algo que ya podía estar pasando.
+Vercel's filesystem is ephemeral per invocation — two requests to the same endpoint can run on
+different serverless instances that never saw what the other wrote. With the app already
+deployed at `bodegueando.vercel.app`, the two stores that used to be just a JSON file in
+`frontend/.data/` (`getOrCreateCode`/`resolveCode` for bodega/customer codes, and Telegram's
+`chat_id ↔ address` mapping) ran a real risk of behaving inconsistently in production — not a
+theoretical problem, but something that could already be happening.
 
-`lib/kv.ts` resuelve esto con dos backends detrás de la misma interfaz
+`lib/kv.ts` solves this with two backends behind the same interface
 (`readJsonStore`/`writeJsonStore`):
 
-- **Con `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN` seteadas** (cuenta gratis en
-  [console.upstash.com](https://console.upstash.com)): usa Redis real vía REST — funciona
-  igual desde cualquier función serverless, sin necesidad de una conexión persistente.
-- **Sin esas variables**: cae de vuelta al archivo JSON de siempre bajo `.data/` — cero
-  fricción para seguir desarrollando en local sin crear una cuenta de Upstash.
+- **With `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` set** (free account at
+  [console.upstash.com](https://console.upstash.com)): uses real Redis over REST — works the same
+  from any serverless function, with no need for a persistent connection.
+- **Without those variables**: falls back to the usual JSON file under `.data/` — zero friction to
+  keep developing locally without creating an Upstash account.
 
-`lib/bodegaCodes.ts` y `lib/telegram.ts` se refactorizaron para usar esta abstracción (sus
-funciones pasaron de sync a `async`); las rutas API que las llaman ya eran `async`, así que
-solo hizo falta agregar los `await` correspondientes. Verificado localmente: el
-round-trip completo (generar código → resolverlo) sigue funcionando igual por el camino de
-fallback a archivo, sin credenciales de Upstash configuradas.
+`lib/bodegaCodes.ts` and `lib/telegram.ts` were refactored to use this abstraction (their
+functions went from sync to `async`); the API routes that call them were already `async`, so only
+the corresponding `await`s had to be added. Verified locally: the full round-trip (generate code →
+resolve it) keeps working the same through the file fallback path, with no Upstash credentials
+configured.
 
-### Faucet automático de saldo de prueba para la demo
+### Automatic test-balance faucet for the demo
 
-`PaymentRouter.receivePayment` cobra en ETH de testnet (el stand-in de eSol — ver "Atajos
-conscientes de hackathon"), y a diferencia del gas (que paga `PuntosPaymaster`), el *monto del
-pago* tiene que salir del propio saldo del comprador. Una cuenta nueva arranca en 0 ETH — antes
-de esto, la única forma de probar un pago real era que un operador le mandara testnet ETH a
-mano a cada cuenta de prueba (`cast send`), algo que no escala para que gente ajena pruebe la
-demo por su cuenta.
+`PaymentRouter.receivePayment` charges in USDG (see "USDG payments"), and unlike gas (which
+`PuntosPaymaster` pays), the *payment amount* has to come out of the buyer's own balance. A new
+account starts at 0 — before this, the only way to try a real payment was for an operator to send
+testnet funds by hand to each test account (`cast send`), which doesn't scale for outsiders trying
+the demo on their own.
 
-`app/api/faucet/route.ts` resuelve esto: apenas `BuyerPanel` detecta una cuenta conectada,
-le pide un pequeño regalo de saldo (`FAUCET_AMOUNT_ETH`, default 0.005 ETH) — una transacción
-real de testnet ETH, no simulada. Protecciones contra abuso:
+`app/api/faucet/route.ts` solves this: as soon as a panel detects a connected account, it asks for
+a small balance gift (`FAUCET_AMOUNT_USDG`, default 10 USDG) — a real transfer of testnet USDG,
+not simulated. The faucet wallet is topped up at [faucet.paxos.com](https://faucet.paxos.com).
+Abuse protections:
 
-- **Una sola vez por dirección**, registrado en `lib/kv.ts` (mismo store que
-  bodega-codes/telegram-links) apenas se manda la transacción — no importa si la cuenta gasta
-  el saldo, no vuelve a pedir.
-- **Chequea el balance on-chain actual** antes de mandar nada — si la cuenta ya tiene fondos
-  (por ejemplo, fondeada a mano antes de que existiera esta ruta), no duplica el regalo.
-- Sin `FAUCET_PRIVATE_KEY` configurada, la ruta simplemente no hace nada (`funded: false`) —
-  no rompe el flujo de pago si no está configurada, solo no regala saldo.
+- **Once per address**, recorded in `lib/kv.ts` (same store as bodega-codes/telegram-links) as
+  soon as the transaction is sent — it doesn't matter if the account spends the balance, it won't
+  ask again.
+- **Checks the current USDG balance** before sending anything — if the account already has funds
+  (for example, funded by hand before this route existed), it doesn't duplicate the gift.
+- Without `FAUCET_PRIVATE_KEY` configured, the route simply does nothing (`funded: false`) — it
+  doesn't break the payment flow if it isn't configured, it just doesn't give away a balance.
 
-Solo aplica a compradores (`BuyerPanel`) — una bodega nunca necesita tener ETH propio, ya que
-`registerSelf`/`setFiadoEnabled`/`extendFiado` no mandan valor, solo gas (que ya cubre
-`PuntosPaymaster`). Probado en vivo: primera llamada manda una transacción real y confirma el
-balance nuevo on-chain; la segunda llamada para la misma dirección no manda nada.
+Both `BuyerPanel` and `BodegaOwnerPanel` request it: a bodega gets paid without needing a balance
+of its own, but to pledge to a group order or post a loan's collateral it does need USDG. Nobody
+needs ETH: gas is covered by `PuntosPaymaster`. Tested live (in its earlier ETH version): the
+first call sends a real transaction and confirms the new balance on-chain; a second call for the
+same address sends nothing.
 
-Igual que el depósito de gas del paymaster, esta cuenta fondeadora necesita reposición manual
-ocasional — es un atajo de demo, no una rampa fiat real (ver "Rampas eSol ↔ PEN reales" en la
-tabla de roadmap más abajo para la distinción con una integración real de Yape/efectivo).
+Like the paymaster's gas deposit, this funding account needs occasional manual top-ups — it's a
+demo shortcut, not a real fiat ramp (see "Real soles ↔ USDG ramps" in the roadmap table below for
+the distinction with a real Yape/cash integration).
 
-### Login sin wallet + registro self-service + gas pagado con PUNTOS (probado en vivo)
+### Wallet-less login + self-service registration + gas paid in PUNTOS (tested live)
 
-La meta del producto es que nadie tenga que saber qué es una wallet. Esto ya funciona de
-punta a punta:
+The product goal is that nobody has to know what a wallet is. This already works end-to-end:
 
-- **Login (`components/Login.tsx`, Privy):** entras con tu teléfono o correo (código OTP),
-  nunca con "conecta tu wallet". Privy crea una wallet embebida en el primer login, invisible
-  para el usuario — solo ve su correo/teléfono en pantalla.
-- **Registro self-service de bodegas (`PaymentRouter.registerSelf`):** cualquiera puede
-  registrarse como bodega desde la web, sin que un admin lo apruebe (ver "Análisis" en el
-  código del contrato: `isBodega` solo decide quién puede *recibir* un pago que el comprador
-  ya eligió mandar — no hay nada que abusar).
-- **Gas pagado con PUNTOS, no con ETH (`PuntosPaymaster.sol`, ERC-4337):** cada persona tiene
-  una *smart account* (no una wallet normal) cuya llave es la wallet embebida de Privy. La
-  primera transacción de cada cuenta la patrocina la app gratis (bootstrap); de ahí en
-  adelante, el gas de cada transacción se cobra directamente en PUNTOS del propio saldo del
-  usuario — sin oráculo de precio, porque PUNTOS ya está denominado en la misma unidad que el
-  ETH del pago original (`cashback = monto × cashbackBps`, en wei). El usuario nunca ve "gas"
-  ni firma un popup de MetaMask; solo ve un botón que dice "Registrar" o "Pagar".
+- **Login (`components/Login.tsx`, Privy):** you sign in with your phone or email (OTP code), or a
+  passkey — never "connect your wallet". Privy creates an embedded wallet on first login,
+  invisible to the user — they only see their email/phone on screen.
+- **Self-service bodega registration (`PaymentRouter.registerSelf`):** anyone can register as a
+  bodega from the web app, without an admin approving it (see the analysis in the contract code:
+  `isBodega` only decides who can *receive* a payment the buyer already chose to send — there's
+  nothing to abuse).
+- **Gas paid in PUNTOS, not ETH (`PuntosPaymaster.sol`, ERC-4337):** each person has a *smart
+  account* (not a regular wallet) whose key is the Privy embedded wallet. An account's first few
+  transactions are sponsored by the app for free (bootstrap); from then on, the gas of each
+  transaction is charged directly in PUNTOS from the user's own balance, converted from ETH at the
+  paymaster's `puntosPerEth` rate (see "USDG payments" — before the migration PUNTOS were minted
+  in the same unit as the ETH payment, so it was 1:1). The user never sees "gas" or signs a
+  MetaMask popup; they only see a button that says "Register" or "Pay".
 
-**Bootstrap de PUNTOS al registrarse, no solo al comprar.** El cashback en PUNTOS lo mintea
-`receivePayment` a quien *paga* (`msg.sender`), nunca a la bodega que cobra — así que una
-cuenta que solo actúa como bodega (nunca compra nada en otro lado) nunca junta PUNTOS por su
-cuenta. Por eso `registerSelf()`/`registerBodega` mintean `BODEGA_BOOTSTRAP_PUNTOS`
-(equivalente a 0.005 ETH, decenas de transacciones futuras) al momento del registro — el mismo
-mecanismo que ya existía para compradores (ganar PUNTOS de su acción calificante), aplicado a
-la acción calificante de una bodega.
+**PUNTOS bootstrap on registration, not just on purchase.** `receivePayment` mints PUNTOS
+cashback to whoever *pays* (`msg.sender`), never to the bodega that gets paid — so an account
+that only acts as a bodega (never buys anything elsewhere) never accumulates PUNTOS on its own.
+That's why `registerSelf()`/`registerBodega` mint `BODEGA_BOOTSTRAP_PUNTOS` at registration — the
+same mechanism that already existed for buyers (earning PUNTOS from their qualifying action),
+applied to a bodega's qualifying action. Since bodegas are now always sponsored by the paymaster
+(see below), this is a small welcome balance rather than a gas requirement.
 
-**El bootstrap gratuito solo se consume si la transacción tuvo éxito.**
-`PuntosPaymaster._postOp` recibe el `PostOpMode` (`opSucceeded`/`opReverted`/
-`postOpReverted`) de cada `UserOperation` y solo marca el bootstrap como usado cuando
-`mode == PostOpMode.opSucceeded` — un primer intento que revierte (un código mal escrito, un
-monto equivocado, cualquier error del usuario) no le cuesta a la cuenta su única transacción
-gratis; sigue disponible para cuando lo intente de nuevo, correctamente.
+**The free bootstrap is only consumed if the transaction succeeded.** `PuntosPaymaster._postOp`
+receives each `UserOperation`'s `PostOpMode` (`opSucceeded`/`opReverted`/`postOpReverted`) and
+only marks a free transaction as used when `mode == PostOpMode.opSucceeded` — a first attempt
+that reverts (a mistyped code, a wrong amount, any user error) doesn't cost the account its free
+runway; it stays available for when they try again, correctly.
 
-Cubierto por `test_RegisterSelf_MintsBootstrapPuntos`/`test_RegisterBodega_MintsBootstrapPuntos`
-(`test/PaymentRouter.t.sol`) y `test_FailedFirstUserOp_DoesNotBurnBootstrap`
-(`test/PuntosPaymaster.t.sol`, con un `EntryPoint` real desplegado en el test, no mockeado).
-Probado en vivo de punta a punta: primero de forma aislada (script standalone con
-`permissionless.js` + el bundler de Pimlico, sin pasar por el navegador) y después con un
-login real de Privy en el navegador — entrar por teléfono/correo → "Soy bodeguero" → registro
-sin popup de wallet, se siente instantáneo.
+Covered by `test_RegisterSelf_MintsBootstrapPuntos`/`test_RegisterBodega_MintsBootstrapPuntos`
+(`test/PaymentRouter.t.sol`) and `test_FailedFreeTransaction_DoesNotConsumeRunway`
+(`test/PuntosPaymaster.t.sol`, with a real `EntryPoint` deployed in the test, not mocked). Tested
+live end-to-end: first in isolation (a standalone script with `permissionless.js` + Pimlico's
+bundler, without going through the browser) and then with a real Privy login in the browser — sign
+in by phone/email → "I'm a shopkeeper" → registration with no wallet popup, it feels instant.
 
-### Gas sin fricción: margen para el comprador, gas gratis para la bodega, techo de cashback realista
+### Frictionless gas: margin for the buyer, free gas for the bodega, realistic cashback cap
 
-Tres decisiones sobre cómo se cobra el gas, pensadas para que ni el comprador ni la bodega
-tengan que entender "gas" en ningún momento:
+Three decisions about how gas is charged, designed so that neither buyer nor bodega ever has to
+understand "gas":
 
-- **Cinco transacciones gratis por cuenta, no solo una** (`FREE_TRANSACTIONS = 5`). Le da
-  runway de sobra a una cuenta nueva cuya segunda o tercera acción no sea necesariamente una
-  compra (pagar fiado, canjear un beneficio — ninguna de las dos genera cashback), sin que
-  nadie se tope con un error de gas en sus primeros pasos, algo que en Yape/Plin/efectivo
-  simplemente no existe como concepto.
-- **Una bodega nunca paga gas, nunca.** `PuntosPaymaster._validatePaymasterUserOp` consulta
-  `PaymentRouter.isBodega(cuenta)` primero: si es una bodega registrada, la patrocina siempre,
-  sin mirar su saldo de PUNTOS ni consumir su runway de transacciones gratis. Encaja con el
-  modelo de negocio (nunca cobrarle a la bodega por su actividad básica) — una bodega hace
-  muchas menos acciones de gas que compras recibe un comprador, así que patrocinarla del todo
-  es barato.
-- **Techo de `cashbackBps` en 3%, no 10%.** El default operativo sigue en 2%; el techo (el
-  máximo que un owner podría llegar a fijar) importa mirando al futuro: si `PUNTOS` algún día
-  se respalda 1:1 con soles reales (roadmap: eSol), ese cashback deja de ser contable y pasa a
-  ser un descuento real sobre la venta de una bodega — 3% se queda muy por debajo de cualquier
-  comisión de POS tradicional (2.5%–3.5%) incluso en ese escenario.
+- **Five free transactions per account, not just one** (`FREE_TRANSACTIONS = 5`). It gives a new
+  account plenty of runway when its second or third action isn't necessarily a purchase (paying
+  back fiado, redeeming a reward — neither generates cashback), without anyone hitting a gas
+  error in their first steps, something that simply doesn't exist as a concept in
+  Yape/Plin/cash.
+- **A bodega never pays gas, ever.** `PuntosPaymaster._validatePaymasterUserOp` checks
+  `PaymentRouter.isBodega(account)` first: if it's a registered bodega, it always sponsors it,
+  without looking at its PUNTOS balance or consuming its free-transaction runway. It fits the
+  business model (never charging the bodega for its basic activity) — a bodega takes far fewer gas
+  actions than a buyer makes purchases, so sponsoring it entirely is cheap.
+- **`cashbackBps` capped at 3%, not 10%.** The operating default stays at 2%; the cap (the maximum
+  an owner could ever set) matters looking ahead: now that PUNTOS are denominated in dollars, if
+  they are ever redeemable 1:1 for real value, cashback stops being an accounting entry and
+  becomes a real discount on a bodega's sale — 3% stays well below any traditional card-terminal
+  fee (2.5%–3.5%) even in that scenario.
 
-**El número detrás de por qué 5 transacciones gratis alcanzan de sobra.** Con el tipo de
-cambio que ya usa la app (~S/6500 por ETH) y los tickets típicos del proyecto (S/5–S/20), el
-2% de cashback por defecto genera entre 1.9x y 3.85x el gas real de una transacción en
-Arbitrum Sepolia — margen cómodo incluso sin contar el runway gratuito.
+**The numbers behind why cashback covers gas.** With 1 PUNTO = 1 USD, the default 2% cashback on
+the project's typical tickets (S/5–S/20, about US$1.5–6) is worth roughly US$0.03–0.12 in PUNTOS.
+A sponsored UserOperation costs on the order of 200k gas; at Arbitrum Sepolia's current gas price
+(~0.05 gwei) and ETH ≈ US$2,500 that's about US$0.025 — so one purchase's cashback covers roughly
+1× to 4.5× the gas of the next transaction, before even counting the free runway. (These are
+order-of-magnitude figures with the stated assumptions; mainnet gas prices on Arbitrum One are
+typically lower.)
 
-Cubierto por 118/118 tests en todo el repo (Rust + Solidity + circuito), incluyendo
-`test_ChargesPuntosOnceFreeTransactionsAreUsed`. Probado en vivo end-to-end en Arbitrum
-Sepolia con dos smart accounts reales (una bodega, un comprador): la bodega hace varias
-acciones sin que su saldo de PUNTOS se toque nunca; el comprador agota sus 5 transacciones
-gratis y recién en la sexta se le exige tener PUNTOS aprobados.
+Covered by the Solidity suite (139 tests, including `test_ChargesPuntosOnceFreeTransactionsAreUsed`
+and the `puntosPerEth` conversion tests). Tested live end-to-end on Arbitrum Sepolia (pre-USDG)
+with two real smart accounts (a bodega and a buyer): the bodega takes several actions without its
+PUNTOS balance ever being touched; the buyer uses up its 5 free transactions and only on the sixth
+is required to have PUNTOS approved.
 
-### Bodeguero y cliente son dos espacios separados, nunca combinados
+### Shopkeeper and customer are two separate spaces, never combined
 
-`app/app/page.tsx` no infiere el rol combinándolo con la vista del otro: una cuenta ya
-registrada como bodega (`isBodega` on-chain) va **directo** a `BodegaOwnerPanel`, sin
-posibilidad de ver `BuyerPanel` en la misma sesión. Una cuenta nueva ve una elección explícita
-antes de cualquier panel — "Soy bodeguero" / "Soy cliente" — en vez del diseño anterior, donde
-cualquiera que entraba caía primero en la vista de comprador con un link de "¿Tienes una
-bodega? Regístrala aquí" flotando dentro de esa misma pantalla (los dos espacios mezclados en
-una sola vista). "Soy bodeguero" dispara `registerSelf()` igual que antes; "Soy cliente" solo
-guarda la elección (`localStorage`, por dirección) para no volver a preguntar en próximas
-visitas — nunca se asume sola. El QR de bodega (`/pagar/[code]`, ver abajo) sigue sin pasar por
-ningún selector: escanear un QR ya es una intención de cliente inequívoca.
+`app/app/page.tsx` doesn't infer the role by combining it with the other's view: an account
+already registered as a bodega (`isBodega` on-chain) goes **straight** to `BodegaOwnerPanel`, with
+no way to see `BuyerPanel` in the same session. A new account sees an explicit choice before any
+panel — "I'm a shopkeeper" / "I'm a customer" — instead of the previous design, where everyone who
+entered landed first on the buyer view with a "Have a bodega? Register it here" link floating
+inside that same screen (both spaces mixed in a single view). "I'm a shopkeeper" triggers
+`registerSelf()` as before; "I'm a customer" only stores the choice (`localStorage`, per address)
+so it doesn't ask again on future visits — it's never assumed on its own. The bodega QR
+(`/pagar/[code]`, see below) still skips any selector: scanning a QR is already an unambiguous
+customer intent.
 
-**El mismo principio dentro de `BuyerPanel.tsx`: no ofrecer una acción hasta confirmar el rol
-del código escrito.** El campo "Código de la bodega" resuelve contra el mismo store que los
-códigos de cliente (`lib/bodegaCodes.ts` no distingue quién generó cada código) — así que
-antes de este fix, escribir por error el código propio (el de "Tu código para que te fíen")
-en ese campo dejaba ver y usar "Pagar en la bodega" igual, y el pago recién revertía on-chain
-al mandarlo, con un error genérico sin explicar por qué. Se agregó una lectura de
-`isBodega(dirección resuelta)` y toda la UI de pago (efectivo, fiado, beneficio social) queda
-oculta hasta que el código resuelto sea, de verdad, una bodega registrada — si no lo es, se
-avisa explícito ("Ese código no corresponde a una bodega") en vez de dejar intentar un pago
-que va a fallar.
+**The same principle inside `BuyerPanel.tsx`: don't offer an action until the role of the typed
+code is confirmed.** The "Bodega code" field resolves against the same store as customer codes
+(`lib/bodegaCodes.ts` doesn't distinguish who generated each code) — so before this fix, mistakenly
+typing your own code (the one under "Your code to get credit") into that field still showed and
+allowed "Pay at the bodega", and the payment only reverted on-chain when sent, with a generic error
+that didn't explain why. A read of `isBodega(resolvedAddress)` was added and the whole payment UI
+(regular, fiado, social benefit) stays hidden until the resolved code really is a registered
+bodega — if it isn't, it says so explicitly ("That code doesn't belong to a bodega") instead of
+letting the user attempt a payment that's going to fail.
 
-### Código de la bodega: QR + número corto, nunca una dirección (probado en vivo)
+### Bodega code: QR + short number, never an address (tested live)
 
-`BodegaOwnerPanel.tsx` ya no muestra una dirección `0x...` para que el cliente la copie —
-genera un código permanente de 6 dígitos (`lib/bodegaCodes.ts`, vía `lib/kv.ts`, sin expirar —
-a diferencia del código de Telegram, este tiene que seguir funcionando meses después, impreso
-en un cartel) y lo muestra como QR
-(`qrcode.react`) que codifica `https://<dominio>/pagar/<código>`.
+`BodegaOwnerPanel.tsx` no longer shows a `0x...` address for the customer to copy — it generates
+a permanent 6-digit code (`lib/bodegaCodes.ts`, via `lib/kv.ts`, never expiring — unlike the
+Telegram code, this one has to keep working months later, printed on a sign) and shows it as a QR
+code (`qrcode.react`) encoding `https://<domain>/pagar/<code>`.
 
-El cliente escanea con la cámara nativa del celular (sin librería de escaneo: la URL abre
-directo `app/pagar/[code]/page.tsx`, que resuelve el código server-side y precarga
-`BuyerPanel`) o escribe el código a mano como respaldo. Ninguno de los dos paneles muestra un
-`0x...` en ningún lado.
+The customer scans it with the phone's native camera (no scanning library: the URL opens
+`app/pagar/[code]/page.tsx` directly, which resolves the code server-side and preloads
+`BuyerPanel`) or types the code by hand as a fallback. Neither panel shows a `0x...` anywhere.
 
-**Dos pools independientes, almacenamiento atómico, largo adaptativo.** El mismo código de 6
-dígitos también se usa para el código personal de un comprador (para que una bodega le fíe, o
-reciba un beneficio social) — dos poblaciones con perfiles de crecimiento muy distintos
-compartiendo un solo espacio de 900,000 combinaciones (6 dígitos, sin el 0 inicial) garantizaba
-agotarlo apenas la base de compradores creciera más allá de eso. `lib/bodegaCodes.ts` separa
-ambos en pools independientes (`"bodega"`/`"buyer"`, claves `code:<pool>:code:<código>` y
-`code:<pool>:addr:<dirección>`), cada uno con su propio margen — las bodegas están acotadas
-(~500-600 mil en el Perú), los compradores no.
+**Two independent pools, atomic storage, adaptive length.** The same 6-digit code is also used
+for a buyer's personal code (so a bodega can extend them credit, or they can receive a social
+benefit) — two populations with very different growth profiles sharing a single space of 900,000
+combinations (6 digits, no leading 0) was guaranteed to run out as soon as the buyer base grew
+past that. `lib/bodegaCodes.ts` splits them into independent pools (`"bodega"`/`"buyer"`, keys
+`code:<pool>:code:<code>` and `code:<pool>:addr:<address>`), each with its own headroom — bodegas
+are bounded (~500–600 thousand in Peru), buyers are not.
 
-La reserva de un código nuevo dejó de ser "leer todo el store, revisar colisión en memoria,
-reescribir todo el store" (`lib/kv.ts`, `readJsonStore`/`writeJsonStore` — el patrón que sigue
-usando el resto de los stores chicos, como `bodegaLocations.ts`/`telegram.ts`) para pasar a
-primitivas atómicas por-clave (`setIfNotExists`, `getValue`, `deleteKey`, `incrementCounter`):
-`SETNX`/`GET`/`DEL`/`INCR` reales en Redis (Upstash), y un mutex en proceso en el fallback de
-archivo local. El motivo no era solo el largo de 6 dígitos — el patrón de blob completo tenía
-una condición de carrera real con solo dos registros concurrentes (ambos leen el store antes de
-que el otro escriba; el segundo `write` borra silenciosamente lo que acababa de guardar el
-primero), sin depender de cuántos códigos hubiera emitidos.
+Reserving a new code stopped being "read the whole store, check for collisions in memory, rewrite
+the whole store" (`lib/kv.ts`, `readJsonStore`/`writeJsonStore` — the pattern the remaining small
+stores such as `bodegaLocations.ts`/`telegram.ts` still use) and moved to atomic per-key
+primitives (`setIfNotExists`, `getValue`, `deleteKey`, `incrementCounter`): real
+`SETNX`/`GET`/`DEL`/`INCR` in Redis (Upstash), and an in-process mutex in the local-file fallback.
+The reason wasn't only the 6-digit length — the whole-blob pattern had a real race condition with
+just two concurrent registrations (both read the store before the other writes; the second
+`write` silently erases what the first had just saved), regardless of how many codes had been
+issued.
 
-`getOrCreateCode(pool, address)` reserva el código primero (`SETNX`) y recién después reclama
-la dirección (`SETNX` de nuevo) — si dos requests concurrentes chocan por la misma dirección,
-quien pierde libera (`DEL`) el código que reservó de más y devuelve el que ya ganó, en vez de
-dejarlo huérfano para siempre. Los códigos se generan con `crypto.randomInt` (Fase 3 del
-diseño), no `Math.random` — el código no es un secreto de seguridad (la autorización real la
-hace la firma de la smart account, esto es solo un puntero de UX), pero usar el generador
-criptográfico no cuesta nada y cierra cualquier duda futura sobre predictibilidad.
+`getOrCreateCode(pool, address)` reserves the code first (`SETNX`) and only then claims the
+address (`SETNX` again) — if two concurrent requests collide on the same address, the loser
+releases (`DEL`) the extra code it reserved and returns the one that already won, instead of
+leaving it orphaned forever. Codes are generated with `crypto.randomInt` (Phase 3 of the design),
+not `Math.random` — the code isn't a security secret (real authorization is the smart account's
+signature, this is just a UX pointer), but using the cryptographic generator costs nothing and
+closes any future question about predictability.
 
-**Largo adaptativo por pool.** Arranca en 6 dígitos (900,000 códigos). Un contador atómico por
-pool (`code:<pool>:count`, incrementado una sola vez por dirección nueva realmente registrada,
-nunca en cada intento) decide el largo de emisión: al llegar al 80% de la capacidad del largo
-actual, los códigos NUEVOS de ese pool pasan a emitirse un dígito más — mismo patrón que un
-número telefónico agregando un dígito cuando un código de área se llena. Los códigos ya
-emitidos siguen resolviendo para siempre, nunca se renumeran ni se acortan: resolver un código
-es un lookup por clave, no le importa cuántos dígitos tenga (los inputs del frontend aceptan
-6-9 dígitos, `/^\d{6,9}$/`, en vez de asumir exactamente 6).
+**Adaptive length per pool.** It starts at 6 digits (900,000 codes). An atomic counter per pool
+(`code:<pool>:count`, incremented only once per genuinely new registered address, never on every
+attempt) decides the issuing length: on reaching 80% of the current length's capacity, NEW codes
+in that pool start being issued with one more digit — the same pattern as a phone numbering plan
+adding a digit when an area code fills up. Codes already issued keep resolving forever, they are
+never renumbered or shortened: resolving a code is a key lookup and doesn't care how many digits
+it has (the frontend inputs accept 6–9 digits, `/^\d{6,9}$/`, instead of assuming exactly 6).
 
-**Migración de esquemas.** `scripts/migrate-bodega-codes.mjs` es un script de un solo uso para
-mover códigos de un esquema viejo (un blob sin distinguir pools) al esquema de pools actual,
-clasificando cada dirección con `PaymentRouter.isBodega` on-chain — la misma fuente de verdad
-que ya usa el resto de la app. Nota operativa importante: el registro de bodegas vive en
-`PaymentRouter`, así que si ese contrato se redespliega, cualquier cuenta que dependiera de
-`registerSelf()` para clasificarse como bodega necesita volver a registrarse en la instancia
-nueva antes de correr esta migración, o quedará clasificada como comprador.
+**Schema migration.** `scripts/migrate-bodega-codes.mjs` is a one-off script to move codes from an
+old schema (a single blob that didn't distinguish pools) to the current pooled schema, classifying
+each address with `PaymentRouter.isBodega` on-chain — the same source of truth the rest of the app
+uses. Important operational note: the bodega registry lives in `PaymentRouter`, so if that
+contract is redeployed (as in the USDG migration), any account that relied on `registerSelf()` to
+be classified as a bodega needs to register again on the new instance before running this
+migration, or it will be classified as a buyer.
 
-### Mapa de bodegas cercanas ([mapcn.dev](https://www.mapcn.dev))
+### Map of nearby bodegas ([mapcn.dev](https://www.mapcn.dev))
 
-`GroupOrders` y `RewardsCatalog` habían quedado documentados como listas globales, no
-filtradas por cercanía, porque no había dónde guardar ni mostrar la ubicación de una bodega.
-Este mapa cierra ese hueco (y esa misma ubicación es la que después usa `GroupOrders` para
-filtrar por radio — ver "GroupOrders" más arriba; `RewardsCatalog` sigue siendo una lista
-global sin filtrar, a propósito: un canje de puntos no depende de ir a recoger nada a un punto
-físico compartido, así que la urgencia de filtrar por cercanía no aplica igual) usando
-[mapcn](https://www.mapcn.dev) — componentes de mapa para
-React sobre MapLibre GL, tiles gratis de CARTO (sin API key), instalados vía el CLI de
-shadcn/ui (`pnpm dlx shadcn@latest add @mapcn/map`, que a su vez necesitó
-`shadcn@latest init` primero — este proyecto no tenía shadcn/ui instalado).
+`GroupOrders` and `RewardsCatalog` had been documented as global lists, not filtered by
+proximity, because there was nowhere to store or display a bodega's location. This map closes
+that gap (and that same location is what `GroupOrders` later uses to filter by radius — see
+"GroupOrders" above; `RewardsCatalog` deliberately stays a global unfiltered list: redeeming
+points doesn't depend on picking anything up at a shared physical point, so the urgency of
+filtering by proximity doesn't apply the same way) using [mapcn](https://www.mapcn.dev) — map
+components for React on top of MapLibre GL, free CARTO tiles (no API key), installed via the
+shadcn/ui CLI (`pnpm dlx shadcn@latest add @mapcn/map`, which in turn required
+`shadcn@latest init` first — this project didn't have shadcn/ui installed).
 
-- **Ubicación como metadata de UX, no on-chain**: mismo criterio que los códigos de 6 dígitos
-  (`lib/bodegaCodes.ts`) — nadie necesita verificación trustless de un pin en un mapa. Vive en
-  `lib/bodegaLocations.ts` (mismo patrón `readJsonStore`/`writeJsonStore` de `lib/kv.ts`,
-  Upstash con fallback a archivo) y `app/api/bodega/location/route.ts` (`POST` guarda/
-  actualiza, `GET` sin parámetros devuelve la lista completa para alimentar el mapa, `GET
-  ?address=` precarga la propia).
-- **`BodegaOwnerPanel.tsx`**, sección "Tu ubicación en el mapa": botón que pide
-  `navigator.geolocation.getCurrentPosition` para centrar el mapa, con un pin arrastrable
-  (`MapMarker draggable`) para ajustarlo a mano si el GPS no cae exacto.
-- **`BuyerPanel.tsx`**, sección "Bodegas cercanas": geolocaliza al cliente para centrar el
-  mapa (si deniega el permiso, centra en Lima por defecto), trae todas las bodegas con
-  ubicación guardada y pone un pin por cada una; el popup de cada pin resuelve su código de 6
-  dígitos (mismo truco que ya usa `RewardsCatalog` en el frontend: `POST /api/bodega/code`
-  crea-o-devuelve el código de cualquier dirección) y linkea a `/pagar/[code]`, la misma ruta
-  que ya usa el QR de la bodega — no hizo falta construir nada nuevo ahí.
-- En el mapa del comprador no hay "cercanía" calculada ni ordenada por distancia: el mapa
-  mismo, centrado en el cliente, ya comunica visualmente qué bodegas están cerca — misma
-  simplicidad deliberada que el resto del proyecto. `GroupOrders` sí calcula distancia real
-  (`lib/distance.ts`, Haversine) porque ahí "cerca" decide qué se muestra primero, no solo qué
-  se ve en un mapa — ver "GroupOrders" más arriba.
+- **Location as UX metadata, not on-chain**: the same criterion as the 6-digit codes
+  (`lib/bodegaCodes.ts`) — nobody needs trustless verification of a pin on a map. It lives in
+  `lib/bodegaLocations.ts` (same `readJsonStore`/`writeJsonStore` pattern from `lib/kv.ts`,
+  Upstash with a file fallback) and `app/api/bodega/location/route.ts` (`POST` saves/updates,
+  `GET` with no parameters returns the full list to feed the map, `GET ?address=` preloads one's
+  own).
+- **`BodegaOwnerPanel.tsx`**, "Your location on the map" section: a button that calls
+  `navigator.geolocation.getCurrentPosition` to center the map, with a draggable pin
+  (`MapMarker draggable`) to adjust it by hand if the GPS isn't exact.
+- **`BuyerPanel.tsx`**, "Nearby bodegas" section: geolocates the customer to center the map (if
+  they deny permission, it centers on Lima by default), fetches every bodega with a saved location
+  and drops a pin for each; each pin's popup resolves its 6-digit code (the same trick
+  `RewardsCatalog` already uses in the frontend: `POST /api/bodega/code` creates-or-returns any
+  address's code) and links to `/pagar/[code]`, the same route the bodega's QR already uses —
+  nothing new had to be built there.
+- The buyer's map doesn't compute or sort by "proximity": the map itself, centered on the
+  customer, already communicates visually which bodegas are close — the same deliberate
+  simplicity as the rest of the project. `GroupOrders` does compute real distance
+  (`lib/distance.ts`, Haversine) because there "nearby" decides what's shown first, not just what's
+  visible on a map — see "GroupOrders" above.
 
-**Tres problemas reales encontrados y arreglados al instalar mapcn, no simulados:**
-`shadcn@latest init` pisó la paleta propia de la app (`--background`/`--foreground` pasaron a
-blanco/negro genérico de shadcn) y rompió `--font-sans` (quedó autorreferenciado en vez de
-apuntar a `--font-geist-sans`) — se corrigió a mano en `app/globals.css`, dejando el resto del
-scaffolding de shadcn (que el popup del mapa sí usa) intacto. Además, el `components/ui/map.tsx`
-que genera el registro de mapcn importa un *default export* de `maplibre-gl` que la versión
-6.2.0 (la que instala hoy) ya no tiene — se cambió a `import * as MapLibreGL` para que
-compile.
+**Three real problems found and fixed when installing mapcn, not simulated:** `shadcn@latest init`
+overwrote the app's own palette (`--background`/`--foreground` became shadcn's generic
+white/black) and broke `--font-sans` (left self-referencing instead of pointing to
+`--font-geist-sans`) — fixed by hand in `app/globals.css`, leaving the rest of shadcn's
+scaffolding (which the map popup does use) intact. In addition, the `components/ui/map.tsx`
+generated by the mapcn registry imports a *default export* from `maplibre-gl` that version 6.2.0
+(the one installed today) no longer has — it was changed to `import * as MapLibreGL` so it
+compiles.
 
-**Por qué existe `scripts/copy-maplibre-worker.mjs`, y por qué `map.tsx` llama
-`setWorkerUrl(...)` a mano.** MapLibre GL calcula la URL de su propio Web Worker (el que
-parsea los tiles fuera del hilo principal) a partir del `import.meta.url` de su paquete, y
-solo la usa si empieza con `http(s):` — bajo el bundling de Next.js/Turbopack esa condición
-nunca se cumple, así que la librería cae en un string vacío y el worker termina apuntando a la
-URL de la propia página en vez de a un script real. El síntoma es silencioso: el mapa compila
-sin errores, pero se queda cargando para siempre, porque el worker "existe" pero nunca procesa
-nada. El fix que documenta MapLibre para este caso es apuntar `setWorkerUrl(...)` a una copia
-servida como archivo estático: `scripts/copy-maplibre-worker.mjs` (hook `postinstall`, para no
-desincronizarse nunca de la versión de `maplibre-gl` instalada) copia `maplibre-gl-worker.mjs`
-y su import relativo real `maplibre-gl-shared.mjs` a `public/` (sin commitearlos — son
-artefactos de build, como `node_modules`), y `components/ui/map.tsx` llama
-`MapLibreGL.setWorkerUrl("/maplibre-gl-worker.mjs")` una sola vez, antes de construir
-cualquier `Map`. Verificado contra un build de producción real (`next build` + `next start`):
-el mapa renderiza tiles reales y responde a interacción — clickear el marker de una bodega
-abre su popup con la dirección real, leída de `/api/bodega/location`.
+**Why `scripts/copy-maplibre-worker.mjs` exists, and why `map.tsx` calls `setWorkerUrl(...)` by
+hand.** MapLibre GL computes the URL of its own Web Worker (the one that parses tiles off the main
+thread) from its package's `import.meta.url`, and only uses it if it starts with `http(s):` — under
+Next.js/Turbopack bundling that condition is never met, so the library falls back to an empty
+string and the worker ends up pointing at the page's own URL instead of a real script. The symptom
+is silent: the map compiles without errors, but stays loading forever, because the worker "exists"
+but never processes anything. The fix MapLibre documents for this case is pointing
+`setWorkerUrl(...)` at a copy served as a static file: `scripts/copy-maplibre-worker.mjs` (a
+`postinstall` hook, so it never drifts from the installed `maplibre-gl` version) copies
+`maplibre-gl-worker.mjs` and its actual relative import `maplibre-gl-shared.mjs` into `public/`
+(not committed — they're build artifacts, like `node_modules`), and `components/ui/map.tsx` calls
+`MapLibreGL.setWorkerUrl("/maplibre-gl-worker.mjs")` once, before building any `Map`. Verified
+against a real production build (`next build` + `next start`): the map renders real tiles and
+responds to interaction — clicking a bodega's marker opens its popup with the real address, read
+from `/api/bodega/location`.
 
-## Atajos conscientes de hackathon
+## USDG payments (Paxos)
 
-- **eSol → ETH nativo de testnet.** `PaymentRouter.receivePayment` usa `msg.value`
-  (ETH nativo de Arbitrum Sepolia) en vez de un token eSol con paridad PEN/USD, para no
-  perder tiempo resolviendo un oráculo de precio durante la hackathon. El plan para reemplazar
-  esto por soles reales (integrar un proveedor de conversión soles↔saldo on-chain en vez de
-  emitir moneda propia, y por qué eso no le agrega costo al cashback) está en la sección
-  "Modelo de negocio" del README.
-- **Oráculo de IA con clave en el servidor.** `app/api/fiado-score/route.ts` firma la
-  transacción `updateScoreFromAi` con una clave privada de testnet guardada en
-  `ORACLE_PRIVATE_KEY` (variable de entorno del servidor Next.js). En producción esto
-  debería ser un servicio de firma dedicado, no una clave en el proceso del backend — eso
-  sigue siendo cierto hoy. Lo que sí se agregó fue un límite al daño que esa clave puede hacer
-  si se filtra: `FiadoScoring.update_score_from_ai` ahora rechaza cualquier límite que el
-  oráculo proponga por encima del doble de lo que el heurístico on-chain ya justificaría con
-  el historial real — ver "Circuit breaker on-chain para el oráculo de IA". No reemplaza mover
-  la clave a un servicio aparte, pero acota el impacto mientras tanto.
-- **`SimpleAccount` (referencia de eth-infinitism), no Safe ni Kernel.** Es la implementación
-  que usa la guía oficial de Pimlico para signers de Privy — menor superficie de riesgo que
-  evaluar otra librería de smart accounts contra el reloj de la hackathon.
-- **Pimlico solo como bundler, paymaster propio.** `PuntosPaymaster.sol` es un contrato
-  nuestro (no el paymaster ERC-20 hosteado de Pimlico) porque PUNTOS es un token propio sin
-  precio de mercado — Pimlico solo transmite las UserOperations al EntryPoint, toda la lógica
-  de "gratis la primera vez, después se cobra en PUNTOS" vive en nuestro contrato.
-- **El depósito de gas del paymaster se repone a mano.** `PuntosPaymaster` necesita ETH real
-  depositado en el EntryPoint para poder patrocinar transacciones (`deposit()` / `cast send`);
-  no hay una ruta automática que lo recargue sola — es responsabilidad de quien opera la app,
-  documentado así a propósito en vez de simular una automatización que no existe. Lo que sí
-  hay es una alerta: `pnpm run check-paymaster-balance` (`scripts/check-paymaster-balance.mjs`)
-  lee el depósito real del EntryPoint y manda un aviso por Telegram a `TELEGRAM_ADMIN_CHAT_ID`
-  si cae bajo `PAYMASTER_BALANCE_ALERT_THRESHOLD_ETH` (default `0.01` ETH) — para correr a
-  mano o desde un cron/CI. Sigue siendo *alerta*, no auto-repuesto: alguien sigue decidiendo
-  cuándo recargar, solo que ahora se entera a tiempo.
-- **El QR de la bodega necesita una URL real, no localhost.** `app/pagar/[code]/page.tsx` solo
-  se puede escanear con la cámara del celular si la app está desplegada (Vercel u otro) —
-  en `localhost` sigue funcionando el código de 6 dígitos escrito a mano.
-- **WhatsApp (Twilio)**: por ahora solo un stub (`app/api/whatsapp/webhook/route.ts`) —
-  implementación planeada para las próximas semanas. Por eso **Telegram se implementó
-  primero**: mismo objetivo (avisar al bodeguero cuando le pagan), disponible de inmediato.
-- **Telegram: webhook en producción, polling solo en desarrollo local.**
-  `app/api/telegram/webhook/route.ts` es lo que corre de verdad contra Vercel — un daemon de
-  polling (`getUpdates` sin parar) no puede correr ahí, cada función serverless responde una
-  vez y se apaga. `scripts/telegram-bot.mjs` se mantiene solo para desarrollo local, donde no
-  hay una URL pública HTTPS para que Telegram le pegue a un webhook. El mapeo chat_id ↔
-  dirección se guarda vía `lib/kv.ts` — ver "Storage: Upstash Redis en producción".
-- **Tasa de cambio ETH → PEN de solo lectura, cacheada.** `lib/exchangeRate.ts` trae
-  ETH/USD de CoinGecko y USD/PEN de open.er-api.com (ambas sin API key; se descartó
-  frankfurter.app porque solo cubre monedas de referencia del BCE y no incluye
-  soles), cachea el resultado ~5 minutos y cae a una tasa aproximada hardcodeada si
-  alguna de las dos está caída — la demo no se puede romper por una API externa.
-  No hay contrato de por medio: es puramente de display, para que nadie vea "ETH" en
-  la app.
+Everything that moves money settles in
+[USDG](https://docs.paxos.com/guides/stablecoin/usdg/testnet), Paxos' regulated stablecoin
+(`0xFFC95faa3d63Cde504a05B567C600B78C0b41892` on Arbitrum Sepolia,
+`0x004B506865409877C9fA29bfb1ebA929984B9bbC` on Arbitrum One, 6 decimals), instead of testnet
+ETH: `PaymentRouter` (payments and `payFiado`), `InvoiceEscrow` (collateral and repayment),
+`GroupOrders` (pledges) and `CreditLine` (pool, collateral, loan and repayment).
 
-## Arquitectura completa / Roadmap
+- **Shared `StablecoinSettlement` base.** All four contracts inherit the stablecoin
+  (`immutable`), its scale to 18 decimals (computed in the constructor from `decimals()`; tokens
+  with more than 18 are rejected) and `_toUsd18`. Internal amounts (an invoice's principal, a
+  group order's goal, a loan) are stored in USDG decimals, which is exactly what gets transferred.
+  Only what enters the PUNTOS/fiado ledger is normalized.
+- **A single unit of account: USD with 18 decimals.** Cashback, history, limit and fiado debt
+  (including `InvoiceEscrow`'s collateral-backed debt) are all in dollars:
+  **1 PUNTO = 1 USD of cashback**. `FiadoScoring` (Stylus) didn't change, because its heuristic
+  doesn't depend on the unit.
+- **Transfer pattern.** `SafeERC20` everywhere, checks-effects-interactions (events are also
+  emitted before any external call) and `nonReentrant` on every function that moves funds, as a
+  second line of defense in case the token ever gains hooks. `PaymentRouter` and
+  `InvoiceEscrow.repayInvoice` send straight from the payer to the bodega, without custody.
+  `repayInvoice(id, amount)` only pulls what's owed, so the "overpay and wait for a refund" case
+  doesn't exist.
+- **`CreditLine`: accounting fixed during the migration.** Previously, a share's value was
+  `poolBalance / totalShares` and didn't count what was lent out. Whoever withdrew while loans
+  were outstanding got too little, whoever deposited at that moment got in at a discount, and with
+  the pool 100% lent out `deposit` reverted with a division by zero. Now
+  `totalAssets = poolBalance + totalReceivable`, where `totalReceivable` = principal + fixed
+  interest of outstanding loans. That way a late depositor doesn't capture interest they didn't
+  fund. A default's loss is recognized at liquidation. Direct donations to the contract don't move
+  the internal accounting (no share-inflation attack). `withdraw` only pays out what's liquid. New
+  views: `requiredCollateral(bodega, amount)` and `amountOwed(loanId)`.
+- **Gas in PUNTOS, with a rate.** Since PUNTOS are no longer 1:1 with ETH, `PuntosPaymaster`
+  converts gas using `puntosPerEth` (the ETH/USD price with 18 decimals). The owner maintains it
+  with `setPuntosPerEth`, bounded to `[100, 100,000]` USD/ETH. It isn't a live oracle read because
+  ERC-7562 doesn't allow a paymaster's validation to read other contracts' storage, and on
+  Arbitrum gas costs fractions of a cent: a rate that's a few percent stale doesn't matter. An
+  account is never charged more than the PUNTOS allowance it granted.
+- **Frontend.** Every payment goes as `approve(exact amount)` + the call in a single UserOperation
+  (`lib/stablecoin.ts::withStablecoinApproval`): one signature and no open allowance. The UI shows
+  everything in soles using the USD→PEN rate (`lib/exchangeRate.ts`, no longer depending on
+  ETH/CoinGecko). Where users handle their own money (their balance, the credit pool, what they owe
+  on a loan) the dollar equivalent is added. Nobody sees "USDG", "ETH" or wei.
+- **Faucet.** `/api/faucet` gives away testnet USDG (the faucet wallet is topped up at
+  [faucet.paxos.com](https://faucet.paxos.com)). It doesn't give away ETH: the paymaster pays gas.
 
-La idea de producto es que la blockchain sea invisible: el bodeguero y el cliente nunca
-deberían ver "gas", "red", "dirección" ni "seed phrase" — todo se siente como una app de
-pagos y puntos, pero por dentro lo crítico (saldo, puntos, fiado) vive on-chain. Lo que
-sigue es la arquitectura completa a la que apunta el producto; la sección **MVP actual**
-marca qué parte de esto ya está construido y probado en testnet.
+Tests: all four contracts against a 6-decimal mock, including fuzz tests of cashback, escrow
+balance and pool invariants (`balance = liquidity + collateral`). `test/PaymentRouter.fork.t.sol`
+runs the router against the real USDG contract on an Arbitrum Sepolia fork
+(`ARBITRUM_SEPOLIA_RPC_URL=... forge test --mc PaymentRouterForkTest`).
+`test/DeployUsdgStack.t.sol` runs the full deploy script and checks every wiring step.
 
-### Capas del sistema
+**Stylus paused: `FiadoScoring` is reused.** Since October 2, 2026, Arbitrum's Security Council has
+paused the activation of **new** Stylus contracts on One, Nova and Sepolia (`cargo stylus check`
+responds "Stylus activations appear to be paused on this chain"). Already-activated contracts keep
+working, so the USDG deployment reuses the existing `FiadoScoring` (`0x22FD…80B2`) and only
+rewires it (`setPaymentRouter`, `setEscrow`). Consequence: the previous payment history (in
+ETH-wei, small amounts) coexists with the new one (in USD-wei) until each bodega accumulates 12
+new payments and the ring buffer replaces it. Until then, those bodegas' heuristic limit comes out
+lower than their USDG history would justify.
 
-1. **Capa de usuario** — app PWA/web para bodeguero y cliente, login con celular/correo
-   (Privy, sin "conecta tu wallet" — implementado), QR de cobro en el local (implementado),
-   avisos de pago por Telegram (implementado) y WhatsApp (en camino, próximas semanas).
-2. **Abstracción de cuenta (ERC-4337)** — smart accounts creadas en el primer login,
-   bundler (Pimlico) + paymaster propio (`PuntosPaymaster.sol`) que patrocina la primera
-   transacción gratis y cobra el resto en PUNTOS — implementado y probado en vivo. Login por
-   passkey (WebAuthn) ya está habilitado como método de autenticación además de SMS/correo —
-   el firmante de la smart account sigue siendo la misma wallet embebida de Privy en los tres
-   casos, así que esto no cambió esta arquitectura, solo agregó una forma más de entrar.
-3. **Contratos on-chain (Arbitrum)** — el ledger de verdad, no una base de datos:
-   - `PaymentRouter.sol` — procesa pagos, cashback, puntos y registro self-service de
-     bodegas (`registerSelf`, implementado — `MerchantRegistry.sol` separado ya no hace
-     falta, esa responsabilidad vive en `PaymentRouter`).
-   - `PuntosPaymaster.sol` — paymaster ERC-4337 que cobra el gas en PUNTOS (implementado).
-   - `LoyaltyPoints.sol` — token de puntos (implementado como `PuntosToken`, ERC-20).
-   - `CreditLineManager.sol` — líneas de fiado, límites y vencimientos (implementado
-     como `FiadoScoring` en Stylus, con scoring on-chain **y** ajuste por IA — ya en
-     producción en testnet, no es "próxima fase").
-   - `InvoiceEscrow.sol` — fiado con garantía parcial, opción adicional junto al fiado sin
-     garantía de siempre (desplegado, verificado y probado en vivo — ver "InvoiceEscrow").
-   - `RewardsCatalog.sol` — catálogo de beneficios canjeables por PUNTOS, propio de cada
-     bodega y canjeable en cualquier bodega de la red (desplegado, verificado y probado en
-     vivo — ver "RewardsCatalog").
-   - `GroupOrders.sol` — compras conjuntas entre bodegas para alcanzar el mínimo de un
-     distribuidor (desplegado, verificado y probado en vivo — ver "GroupOrders").
-   - `CreditCertificate.sol` + `CreditLine.sol` — certificado de crédito con Zero-Knowledge
-     (Circom/Groth16) y línea de crédito on-chain que lo consume (implementado y testeado —
-     ver "CreditCertificate"/"CreditLine").
-4. **Backend y servicios** — API que orquesta creación de smart account, llamadas a
-   contratos, scoring y notificaciones; base de datos para perfil/catálogo/métricas y
-   cache de saldos para que la UX se sienta instantánea; motor de riesgo off-chain
-   como complemento al scoring on-chain.
-5. **On/off ramps** — conversión eSol ↔ PEN bancarizado vía rampas locales. Para la
-   hackathon queda simulado (eSol = ETH nativo de testnet, ver "Atajos" arriba), pero
-   el punto de integración queda claro en el diseño.
+## Deliberate hackathon shortcuts
+
+- **Real soles don't flow in and out of the app yet.** Everything settles in testnet USDG (see
+  "USDG payments"). The soles↔USDG ramp with a licensed provider in Peru is roadmap; see "Business
+  model" in the README.
+- **AI oracle with a server-held key.** `app/api/fiado-score/route.ts` signs the
+  `updateScoreFromAi` transaction with a testnet private key stored in `ORACLE_PRIVATE_KEY` (an
+  environment variable of the Next.js server). In production this should be a dedicated signing
+  service, not a key in the backend process — that's still true today. What was added is a limit
+  on the damage that key can do if it leaks: `FiadoScoring.update_score_from_ai` now rejects any
+  limit the oracle proposes above twice what the on-chain heuristic would already justify with the
+  real history — see "On-chain circuit breaker for the AI oracle". It doesn't replace moving the
+  key to a separate service, but it bounds the impact in the meantime.
+- **`SimpleAccount` (eth-infinitism's reference), not Safe or Kernel.** It's the implementation
+  Pimlico's official guide uses for Privy signers — a smaller risk surface than evaluating another
+  smart-account library against the hackathon clock.
+- **Pimlico only as bundler, our own paymaster.** `PuntosPaymaster.sol` is our own contract (not
+  Pimlico's hosted ERC-20 paymaster) because PUNTOS is our own token with no market price —
+  Pimlico only relays UserOperations to the EntryPoint; all the "free at first, then charged in
+  PUNTOS" logic lives in our contract.
+- **The paymaster's gas deposit is topped up by hand.** `PuntosPaymaster` needs real ETH deposited
+  in the EntryPoint to sponsor transactions (`deposit()` / `cast send`); there's no automatic path
+  that refills it — it's the operator's responsibility, documented that way on purpose instead of
+  simulating automation that doesn't exist. What there is, is an alert:
+  `pnpm run check-paymaster-balance` (`scripts/check-paymaster-balance.mjs`) reads the real
+  EntryPoint deposit and sends a Telegram alert to `TELEGRAM_ADMIN_CHAT_ID` if it falls below
+  `PAYMASTER_BALANCE_ALERT_THRESHOLD_ETH` (default `0.01` ETH) — to run by hand or from a cron/CI.
+  It's still an *alert*, not auto-refill: someone still decides when to top up, they just find out
+  in time.
+- **The bodega QR needs a real URL, not localhost.** `app/pagar/[code]/page.tsx` can only be
+  scanned with the phone camera if the app is deployed (Vercel or similar) — on `localhost` the
+  hand-typed 6-digit code still works.
+- **WhatsApp (Twilio)**: just a stub for now (`app/api/whatsapp/webhook/route.ts`) —
+  implementation planned for the coming weeks. That's why **Telegram was implemented first**: same
+  goal (telling the shopkeeper when they get paid), available right away.
+- **Telegram: webhook in production, polling only in local development.**
+  `app/api/telegram/webhook/route.ts` is what actually runs on Vercel — a polling daemon
+  (`getUpdates` non-stop) can't run there, each serverless function responds once and shuts down.
+  `scripts/telegram-bot.mjs` is kept only for local development, where there's no public HTTPS URL
+  for Telegram to hit a webhook. The chat_id ↔ address mapping is stored via `lib/kv.ts` — see
+  "Storage: Upstash Redis in production".
+- **Read-only, cached USD → PEN exchange rate.** `lib/exchangeRate.ts` fetches USD/PEN from
+  open.er-api.com (no API key; frankfurter.app was ruled out because it only covers ECB reference
+  currencies and doesn't include soles), caches the result for ~5 minutes and falls back to a
+  hard-coded approximate rate if it's down — the demo can't break because of an external API.
+  There's no contract involved: it's for display, and for converting what the user types in soles
+  into the USDG amount they sign.
+
+## Full architecture / Roadmap
+
+The product idea is that the blockchain is invisible: the shopkeeper and the customer should never
+see "gas", "network", "address" or "seed phrase" — everything feels like a payments-and-points
+app, but under the hood what matters (balance, points, fiado) lives on-chain. What follows is the
+full architecture the product is aiming for; the **Current MVP** section marks which part of it is
+already built and tested on testnet.
+
+### System layers
+
+1. **User layer** — PWA/web app for shopkeeper and customer, login with phone/email (Privy, no
+   "connect your wallet" — implemented), in-store payment QR (implemented), payment alerts via
+   Telegram (implemented) and WhatsApp (coming in the next few weeks).
+2. **Account abstraction (ERC-4337)** — smart accounts created on first login, bundler (Pimlico)
+   + our own paymaster (`PuntosPaymaster.sol`) that sponsors the first transactions for free and
+   charges the rest in PUNTOS — implemented and tested live. Passkey login (WebAuthn) is already
+   enabled as an authentication method alongside SMS/email — the smart account's signer is still
+   the same Privy embedded wallet in all three cases, so this didn't change the architecture, it
+   just added one more way in.
+3. **On-chain contracts (Arbitrum)** — the real ledger, not a database; everything that moves
+   money settles in USDG:
+   - `PaymentRouter.sol` — processes payments, cashback, points and self-service bodega
+     registration (`registerSelf`, implemented — a separate `MerchantRegistry.sol` is no longer
+     needed, that responsibility lives in `PaymentRouter`).
+   - `PuntosPaymaster.sol` — ERC-4337 paymaster that charges gas in PUNTOS (implemented).
+   - `LoyaltyPoints.sol` — points token (implemented as `PuntosToken`, ERC-20).
+   - `CreditLineManager.sol` — fiado lines, limits and due dates (implemented as `FiadoScoring`
+     on Stylus, with on-chain scoring **and** AI adjustment — already live on testnet, not a "next
+     phase").
+   - `InvoiceEscrow.sol` — fiado with partial collateral, an additional option alongside the usual
+     unsecured fiado (deployed, verified and tested live — see "InvoiceEscrow").
+   - `RewardsCatalog.sol` — rewards catalog redeemable for PUNTOS, owned by each bodega and
+     redeemable at any bodega in the network (deployed, verified and tested live — see
+     "RewardsCatalog").
+   - `GroupOrders.sol` — joint purchases between bodegas to reach a distributor's minimum
+     (deployed, verified and tested live — see "GroupOrders").
+   - `CreditCertificate.sol` + `CreditLine.sol` — Zero-Knowledge credit certificate
+     (Circom/Groth16) and the on-chain credit line that consumes it (implemented and tested — see
+     "CreditCertificate"/"CreditLine").
+4. **Backend and services** — an API orchestrating smart-account creation, contract calls,
+   scoring and notifications; a database for profile/catalog/metrics and a balance cache so the UX
+   feels instant; an off-chain risk engine complementing on-chain scoring.
+5. **On/off ramps** — soles ↔ USDG conversion through local, licensed ramps. Settlement already
+   happens in USDG (testnet); the ramp itself is roadmap, but the integration point is clear in
+   the design.
 
 ```
-[Cliente / Bodeguero]
-       │  login con teléfono/correo (Privy)
+[Customer / Shopkeeper]
+       │  login with phone/email/passkey (Privy)
        ▼
-[App PWA / Web] ←→ [Bot de Telegram] (WhatsApp: próximas semanas)
-       │  UserOperation (smart account, firmada por la wallet embebida)
+[PWA / Web app] ←→ [Telegram bot] (WhatsApp: coming weeks)
+       │  UserOperation (smart account, signed by the embedded wallet)
        ▼
 [Bundler (Pimlico) + PuntosPaymaster.sol]
        │
        ▼
 [Arbitrum Sepolia]
-  - PaymentRouter (pagos, cashback, registro self-service de bodegas)
+  - PaymentRouter (USDG payments, cashback, self-service bodega registration)
   - PuntosToken (LoyaltyPoints)
   - FiadoScoring / CreditLineManager (Stylus)
-  - PuntosPaymaster (paga el gas, cobrado en PUNTOS)
+  - PuntosPaymaster (pays gas, charged in PUNTOS)
+  - InvoiceEscrow, GroupOrders, CreditLine (USDG), RewardsCatalog, CreditCertificate, BeneficioToken
 ```
 
-### MVP actual — qué está construido vs. roadmap
+### Current MVP — what's built vs. roadmap
 
-| Pieza | Estado |
+| Piece | Status |
 |---|---|
-| Pago QR → cashback → puntos (`PaymentRouter` + `PuntosToken`) | ✅ Desplegado y probado en Arbitrum Sepolia |
-| Fiado con scoring on-chain (`FiadoScoring`, Stylus) | ✅ Desplegado y verificado |
-| Fiado opt-in por bodega (`setFiadoEnabled`/`isFiadoEnabled`) | ✅ Desplegado — apagado por defecto, cada bodega prende el suyo |
-| Ledger de fiado por cliente (`extendFiado`/`repayFiado`/`payFiado`) | ✅ Probado en vivo end-to-end en Arbitrum Sepolia (además de 6/6 Rust, 17/17 Solidity) — ver "Fiado con libro de deuda real" |
-| Circuit breaker on-chain del oráculo de IA (`updateScoreFromAi` acotado al 2× del heurístico) | ✅ Probado en vivo en Arbitrum Sepolia (8/8 Rust) — ver "Circuit breaker on-chain para el oráculo de IA" |
-| Login con passkey (WebAuthn) además de SMS/correo | ✅ Habilitado — mismo embedded wallet como firmante, solo cambia el método de autenticación |
-| Alerta de balance bajo en `PuntosPaymaster` (`pnpm run check-paymaster-balance`) | ✅ Funcional — sigue siendo alerta, no auto-repuesto, a propósito |
-| `BeneficioToken` — programas sociales restringidos (Vaso de Leche, Qali Warma, Pensión 65) | ✅ Desplegado, verificado y con ownership transferido a una sesión real logueada (9/9, 26/26 en todo el repo). UI de emisión admin-only en el panel de bodega + UI de canje en el panel de cliente, ambas funcionales — ver "`BeneficioToken.sol`" |
-| Bodeguero/cliente como espacios separados (selector explícito, sin vistas combinadas) | ✅ Funcional — ver "Bodeguero y cliente son dos espacios separados" |
-| Códigos de bodega/cliente y vínculos de Telegram en Upstash Redis (no archivo local) | ✅ Funcional con fallback automático a archivo si no hay credenciales de Upstash — cierra el riesgo real del filesystem efímero de Vercel, ver "Storage: Upstash Redis en producción" |
-| Faucet automático de saldo de prueba para compradores nuevos | ✅ Funcional — una vez por cuenta, probado en vivo con transacción real, ver "Faucet automático de saldo de prueba" |
-| Ajuste de fiado con IA (Claude, en español, escribe on-chain) | ✅ Probado en vivo end-to-end |
-| Dashboard web (leer score/límite, pagar, pedir recálculo IA) | ✅ Funcional |
-| Vistas separadas bodeguero/comprador, detectadas por rol on-chain | ✅ Funcional (`isBodega` en `PaymentRouter`) |
-| Avisos de pago y perfil (`/perfil`) por Telegram, todo en soles | ✅ Funcional — webhook en producción (el daemon de polling no puede correr en Vercel), vinculación por código de 6 dígitos vía deep link `/start`, ver "El bot de Telegram como perfil" |
-| Montos en soles (PEN) en vez de ETH, con tasa de cambio real | ✅ Funcional — conversión de display, ver "Atajos" |
-| Registro self-service de bodegas (`PaymentRouter.registerSelf`) | ✅ Probado en vivo — cualquiera se registra desde la web, sin admin |
-| Login sin wallet (Privy, teléfono/correo) | ✅ Probado en vivo — wallet embebida, nunca se ve "wallet" ni una dirección |
-| Gas pagado en PUNTOS vía Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Probado en vivo — 5 transacciones gratis por cuenta (antes 1), bodegas patrocinadas siempre sin tocar PUNTOS, techo de cashback bajado de 10% a 3%, ver "Gas sin fricción..." |
-| Código de bodega por QR + número corto (sin `0x...` visible) | ✅ Probado en vivo — `/pagar/[code]`, código permanente de 6 dígitos |
-| Mapa de bodegas cercanas (mapcn.dev / MapLibre) | ✅ Funcional — cada bodega guarda su ubicación, el cliente ve un mapa con todas y puede pagar directo desde el pin. Verificado con Playwright contra un build de producción real (`next build`+`next start`) después de arreglar un bug real de carga del worker de MapLibre bajo Turbopack, ver "Mapa de bodegas cercanas" |
-| `InvoiceEscrow` (fiado con garantía parcial) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (11/11 Rust, 43/43 Solidity) — ver "InvoiceEscrow" |
-| `RewardsCatalog` (catálogo de beneficios canjeables entre bodegas) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (23/23 Solidity, 66/66 en todo el repo) — ver "RewardsCatalog" |
-| Compras conjuntas entre bodegas (`GroupOrders.sol`), filtradas por cercanía en el frontend | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia (19/19 Solidity, 85/85 en todo el repo) — ver "GroupOrders" |
-| Score crediticio del bodeguero con Zero-Knowledge (`CreditCertificate.sol`) | ✅ Desplegado, verificado y probado en vivo en Arbitrum Sepolia — prueba ZK real generada y verificada on-chain, ver "CreditCertificate" |
-| Línea de crédito on-chain que consume el certificado ZK (`CreditLine.sol`) | ✅ Desplegado, verificado y probado en vivo — préstamo con garantía reducida (50% en tier 500) y repago, ver "CreditLine" |
-| Notificaciones por WhatsApp | 🔜 En camino (próximas semanas) — stub existente en `app/api/whatsapp/webhook/route.ts` con los TODOs concretos que faltan; Telegram salió primero por ser más rápido de demostrar |
-| Rampas eSol ↔ PEN reales | 🔜 Roadmap — hoy simulado con ETH de testnet (ver "Atajos"); el plan es integrar un proveedor de conversión soles↔saldo on-chain ya autorizado en Perú, no emitir un token propio — ver "Modelo de negocio" en el README para el detalle completo, incluyendo por qué esto no le agrega costo al cashback |
+| QR payment → cashback → points (`PaymentRouter` + `PuntosToken`) | ✅ Deployed and tested on Arbitrum Sepolia |
+| USDG settlement for every contract that moves money (`StablecoinSettlement`) | ✅ Implemented and tested (unit, fuzz, Arbitrum Sepolia fork against real USDG, full deploy-script test); redeploy via `DeployUsdgStack.s.sol` in progress — see "USDG payments" |
+| Fiado with on-chain scoring (`FiadoScoring`, Stylus) | ✅ Deployed and verified (reused as-is: new Stylus activations are paused) |
+| Opt-in fiado per bodega (`setFiadoEnabled`/`isFiadoEnabled`) | ✅ Deployed — off by default, each bodega turns its own on |
+| Per-customer fiado ledger (`extendFiado`/`repayFiado`/`payFiado`) | ✅ Tested live end-to-end on Arbitrum Sepolia (plus Rust and Solidity unit tests) — see "Fiado with a real debt ledger" |
+| AI oracle on-chain circuit breaker (`updateScoreFromAi` bounded to 2× the heuristic) | ✅ Tested live on Arbitrum Sepolia — see "On-chain circuit breaker for the AI oracle" |
+| Passkey login (WebAuthn) alongside SMS/email | ✅ Enabled — same embedded wallet as signer, only the authentication method changes |
+| Low-balance alert for `PuntosPaymaster` (`pnpm run check-paymaster-balance`) | ✅ Working — still an alert, not auto-refill, on purpose |
+| `BeneficioToken` — restricted social programs (Vaso de Leche, Qali Warma, Pensión 65) | ✅ Deployed, verified and with ownership transferred to a real logged-in session. Admin-only issuance UI in the bodega panel + redemption UI in the customer panel, both working — see "`BeneficioToken.sol`" |
+| Shopkeeper/customer as separate spaces (explicit selector, no combined views) | ✅ Working — see "Shopkeeper and customer are two separate spaces" |
+| Bodega/customer codes and Telegram links in Upstash Redis (not a local file) | ✅ Working with automatic file fallback if there are no Upstash credentials — closes the real risk of Vercel's ephemeral filesystem, see "Storage: Upstash Redis in production" |
+| Automatic test-balance faucet for new accounts | ✅ Working — once per account, now in USDG, see "Automatic test-balance faucet" |
+| AI fiado adjustment (Claude, explained in Spanish, writes on-chain) | ✅ Tested live end-to-end |
+| Web dashboard (read score/limit, pay, request AI recalculation) | ✅ Working |
+| Separate shopkeeper/buyer views, detected by on-chain role | ✅ Working (`isBodega` in `PaymentRouter`) |
+| Payment alerts and profile (`/perfil`) on Telegram, all in soles | ✅ Working — webhook in production (the polling daemon can't run on Vercel), linking via 6-digit code through a `/start` deep link, see "The Telegram bot as a profile" |
+| Amounts in soles (PEN), never ETH/USDG, with a real exchange rate | ✅ Working — USD→PEN, see "Deliberate hackathon shortcuts" |
+| Self-service bodega registration (`PaymentRouter.registerSelf`) | ✅ Tested live — anyone registers from the web app, no admin |
+| Wallet-less login (Privy, phone/email) | ✅ Tested live — embedded wallet, the user never sees "wallet" or an address |
+| Gas paid in PUNTOS via Account Abstraction (`PuntosPaymaster.sol`, ERC-4337) | ✅ Tested live — 5 free transactions per account, bodegas always sponsored without touching PUNTOS, cashback cap lowered from 10% to 3%; now converted at an owner-maintained ETH/USD rate, see "Frictionless gas..." |
+| Bodega code via QR + short number (no visible `0x...`) | ✅ Tested live — `/pagar/[code]`, permanent 6-digit code |
+| Map of nearby bodegas (mapcn.dev / MapLibre) | ✅ Working — each bodega saves its location, customers see a map with all of them and can pay straight from the pin. Verified with Playwright against a real production build (`next build`+`next start`) after fixing a real MapLibre worker loading bug under Turbopack, see "Map of nearby bodegas" |
+| `InvoiceEscrow` (fiado with partial collateral) | ✅ Deployed, verified and tested live on Arbitrum Sepolia (pre-USDG); USDG version: 19/19 Solidity tests — see "InvoiceEscrow" |
+| `RewardsCatalog` (rewards redeemable across bodegas) | ✅ Deployed, verified and tested live on Arbitrum Sepolia (24/24 Solidity) — see "RewardsCatalog" |
+| Joint purchases between bodegas (`GroupOrders.sol`), filtered by proximity in the frontend | ✅ Deployed, verified and tested live on Arbitrum Sepolia (pre-USDG); USDG version: 20/20 Solidity tests — see "GroupOrders" |
+| Shopkeeper's Zero-Knowledge credit score (`CreditCertificate.sol`) | ✅ Deployed, verified and tested live on Arbitrum Sepolia — real ZK proof generated and verified on-chain, see "CreditCertificate" |
+| On-chain credit line consuming the ZK certificate (`CreditLine.sol`) | ✅ Deployed, verified and tested live (pre-USDG) — loan with reduced collateral (50% at tier 500) and repayment; USDG version with fixed share accounting: 21/21 Solidity tests, see "CreditLine" |
+| WhatsApp notifications | 🔜 Coming (next few weeks) — existing stub in `app/api/whatsapp/webhook/route.ts` with the concrete TODOs that remain; Telegram shipped first because it was faster to demo |
+| Real soles ↔ USDG ramps | 🔜 Roadmap — testnet USDG today (see "USDG payments"); the plan is to integrate a conversion provider already licensed in Peru, not to issue our own token — see "Business model" in the README for the full detail, including why this adds no cost to cashback |
 
-### Flujo de demo objetivo (jurado)
+### Target demo flow (judges)
 
-1. Cliente escanea el QR de la bodega y paga.
-2. Recibe confirmación y puntos de cashback al instante.
-3. Se pide el recálculo de fiado — la IA analiza el historial on-chain y ajusta el
-   límite, explicando por qué en español simple.
-4. Todo es verificable en el explorador: contratos verificados, transacciones reales.
+1. The customer scans the bodega's QR code and pays in soles (settled in USDG).
+2. They get a confirmation and cashback points instantly.
+3. A fiado recalculation is requested — the AI analyzes the on-chain history and adjusts the
+   limit, explaining why in plain Spanish.
+4. Everything is verifiable on the explorer: verified contracts, real transactions.
 
 ## Setup
 
-### Prerequisitos
+### Prerequisites
 
 - Node.js + [pnpm](https://pnpm.io/)
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (`forge`, `cast`)
-- [Rust](https://rustup.rs/) + target `wasm32-unknown-unknown` + [cargo-stylus](https://github.com/OffchainLabs/cargo-stylus)
+- [Rust](https://rustup.rs/) + the `wasm32-unknown-unknown` target + [cargo-stylus](https://github.com/OffchainLabs/cargo-stylus)
 
 ```bash
-# Rust + wasm target
+# Rust + wasm target (the toolchain version is pinned in rust-toolchain.toml)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 rustup target add wasm32-unknown-unknown
-cargo install cargo-stylus
+cargo install --locked cargo-stylus
 
 # Foundry
 curl -L https://foundry.paradigm.xyz | bash
 foundryup
 ```
 
-### Instalar dependencias del monorepo
+### Install the monorepo dependencies
 
 ```bash
 pnpm install
 ```
 
-### Contratos Solidity
+### Solidity contracts
 
-`contracts/solidity/lib/` (forge-std, OpenZeppelin) no está versionado — son dependencias de
-terceros reproducibles, no código del proyecto. Instalarlas primero:
+`contracts/solidity/lib/` (forge-std, OpenZeppelin, account-abstraction) isn't versioned — they're
+reproducible third-party dependencies, not project code. Install them first:
 
 ```bash
 cd contracts/solidity
-forge install foundry-rs/forge-std --no-git
-forge install OpenZeppelin/openzeppelin-contracts --no-git
+forge install foundry-rs/forge-std@v1.9.7 --no-git
+forge install OpenZeppelin/openzeppelin-contracts@v5.1.0 --no-git
 forge install eth-infinitism/account-abstraction@v0.7.0 --no-git
 cd ../..
 ```
@@ -1004,179 +1054,232 @@ cd ../..
 ```bash
 pnpm run contracts:build
 pnpm run contracts:test
+# optional: fork test against the real USDG contract
+cd contracts/solidity && ARBITRUM_SEPOLIA_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc forge test --mc PaymentRouterForkTest
 ```
 
-Deploy a Arbitrum Sepolia (requiere `contracts/solidity/.env` con `PRIVATE_KEY`,
-`ARBITRUM_SEPOLIA_RPC_URL`, `FIADO_SCORING_ADDRESS` ya desplegado — ver abajo):
+#### Deploying the USDG stack (recommended)
+
+`script/DeployUsdgStack.s.sol` deploys, in a single broadcast, everything that moves money
+(`PaymentRouter`, `PuntosPaymaster`, `InvoiceEscrow`, `GroupOrders`, `CreditLine`) and wires it:
+`PuntosToken`'s minter, `setPaymentRouter`/`setEscrow`/`setAiOracle` on `FiadoScoring`, the
+paymaster's EntryPoint deposit, and `setBodegaRegistry` on `RewardsCatalog`/`BeneficioToken` when
+the deployer owns them. Before that, it recovers the previous paymaster's ETH deposit. It reuses
+`PuntosToken`, `FiadoScoring` (Stylus is paused, see "USDG payments") and `CreditCertificate`.
+
+```bash
+cd contracts/solidity
+# .env: PRIVATE_KEY (deployer 0x3B0e…AFbf), ARBITRUM_SEPOLIA_RPC_URL, ARBISCAN_API_KEY
+FIADO_SCORING_ADDRESS=0x22FD7ED957b356dcF4a93574D24fC724736480B2 \
+PUNTOS_TOKEN_ADDRESS=0x2bd8AbEB2F5598f8477560C70c742aFfc22912de \
+CREDIT_CERTIFICATE_ADDRESS=0xc42547586FbEfCA3D8EA189B1e87a2c234f67828 \
+AI_ORACLE_ADDRESS=<address of ORACLE_PRIVATE_KEY> \
+REWARDS_CATALOG_ADDRESS=0x0c07b1b63aAbAD36d15877D80f10411534C44a2f \
+BENEFICIO_TOKEN_ADDRESS=0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc \
+OLD_PAYMASTER_ADDRESS=0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403 \
+PUNTOS_PER_ETH=<current ETH/USD price>000000000000000000 \
+  forge script script/DeployUsdgStack.s.sol:DeployUsdgStack \
+  --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
+```
+
+The script prints the `NEXT_PUBLIC_*_ADDRESS` values for the frontend. Afterwards:
+
+- `BeneficioToken` is owned by a smart account, not the deployer: rewire it from that account with
+  `setBodegaRegistry(newRouter)`.
+- Bodegas register again (the new router starts with an empty `isBodega`).
+- Fund the `FAUCET_PRIVATE_KEY` wallet with USDG at [faucet.paxos.com](https://faucet.paxos.com)
+  (plus a little ETH for its own gas).
+- Update the "Deployed contracts" table.
+
+The individual scripts (`RedeployPaymentRouter`, `DeployInvoiceEscrow`, `DeployGroupOrders`,
+`DeployCreditLine`, `DeployPuntosPaymaster`) still work for redeploying a single contract. They
+all take the stablecoin from `STABLECOIN_ADDRESS` (USDG on Arbitrum Sepolia by default), via
+`script/StablecoinScript.sol`.
+
+#### Individual deploys
+
+Deploy to Arbitrum Sepolia from scratch (requires `contracts/solidity/.env` with `PRIVATE_KEY`,
+`ARBITRUM_SEPOLIA_RPC_URL`, and an already-deployed `FIADO_SCORING_ADDRESS` — see below):
 
 ```bash
 cd contracts/solidity
 forge script script/Deploy.s.sol:Deploy --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
 
-Si `PuntosToken`/`FiadoScoring` ya están desplegados y solo cambió `PaymentRouter.sol`, usar
-`RedeployPaymentRouter.s.sol` en vez de `Deploy.s.sol` — reusa el `PuntosToken` existente en
-vez de crear uno nuevo (que borraría el saldo de puntos de todos los que ya probaron la app):
+If `PuntosToken`/`FiadoScoring` are already deployed and only `PaymentRouter.sol` changed, use
+`RedeployPaymentRouter.s.sol` instead of `Deploy.s.sol` — it reuses the existing `PuntosToken`
+instead of creating a new one (which would wipe the points balance of everyone who already tried
+the app):
 
 ```bash
 cd contracts/solidity
-PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> \
+PUNTOS_TOKEN_ADDRESS=<already deployed address> FIADO_SCORING_ADDRESS=<already deployed address> \
   forge script script/RedeployPaymentRouter.s.sol:RedeployPaymentRouter \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
-# después: cast send <FiadoScoringAddress> "setPaymentRouter(address)" <nuevoRouter> ...
+# then: cast send <FiadoScoringAddress> "setPaymentRouter(address)" <newRouter> ...
 ```
 
-Deploy de `PuntosPaymaster` (requiere `PuntosToken` y `PaymentRouter` ya desplegados — este
-último como `IBodegaRegistry`, para saber a quién patrocinar sin cobrar PUNTOS; el EntryPoint
-v0.7 usa la misma dirección canónica `0x0000000071727De22E5E9d8BAf0edAc6f37da032` en toda red
-EVM, ya confirmada desplegada en Arbitrum Sepolia):
+`PuntosPaymaster` deploy (requires `PuntosToken` and `PaymentRouter` already deployed — the latter
+as `IBodegaRegistry`, to know whom to sponsor without charging PUNTOS; EntryPoint v0.7 uses the same
+canonical address `0x0000000071727De22E5E9d8BAf0edAc6f37da032` on every EVM network, already
+confirmed deployed on Arbitrum Sepolia):
 
 ```bash
 cd contracts/solidity
-PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> DEPOSIT_ETH=0.02ether \
+PUNTOS_TOKEN_ADDRESS=<already deployed address> PAYMENT_ROUTER_ADDRESS=<already deployed address> \
+DEPOSIT_ETH=20000000000000000 PUNTOS_PER_ETH=<current ETH/USD price>000000000000000000 \
   forge script script/DeployPuntosPaymaster.s.sol:DeployPuntosPaymaster \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
 
-Si `PaymentRouter` se redespliega después, repuntar el paymaster sin redesplegarlo:
-`cast send <PuntosPaymasterAddress> "setBodegaRegistry(address)" <nuevoRouter> ...`.
+If `PaymentRouter` is redeployed later, repoint the paymaster without redeploying it:
+`cast send <PuntosPaymasterAddress> "setBodegaRegistry(address)" <newRouter> ...`. Keep the gas
+rate current with `cast send <PuntosPaymasterAddress> "setPuntosPerEth(uint256)" <rate> ...`.
 
-Deploy de `BeneficioToken` (requiere `PaymentRouter` ya desplegado, usado como
-`IBodegaRegistry`):
+`BeneficioToken` deploy (requires `PaymentRouter` already deployed, used as `IBodegaRegistry`):
 
 ```bash
 cd contracts/solidity
-PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> \
+PAYMENT_ROUTER_ADDRESS=<already deployed address> \
   forge script script/DeployBeneficioToken.s.sol:DeployBeneficioToken \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
-# opcional: cast send <BeneficioTokenAddress> "transferOwnership(address)" <smart account admin>
+# optional: cast send <BeneficioTokenAddress> "transferOwnership(address)" <admin smart account>
 ```
 
-Deploy de `InvoiceEscrow` (requiere `PaymentRouter` y `FiadoScoring` ya desplegados; este
-último necesita soportar `setEscrow`/`extendFiadoFor`, agregados junto con este contrato —
-ver "InvoiceEscrow" más arriba):
+`InvoiceEscrow` deploy (requires `PaymentRouter` and `FiadoScoring` already deployed; the latter
+must support `setEscrow`/`extendFiadoFor`, added together with this contract — see "InvoiceEscrow"
+above):
 
 ```bash
 cd contracts/solidity
-PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> FIADO_SCORING_ADDRESS=<dirección ya desplegada> \
+PAYMENT_ROUTER_ADDRESS=<already deployed address> FIADO_SCORING_ADDRESS=<already deployed address> \
   forge script script/DeployInvoiceEscrow.s.sol:DeployInvoiceEscrow \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
-# después: cast send <FiadoScoringAddress> "setEscrow(address)" <InvoiceEscrowAddress> ...
+# then: cast send <FiadoScoringAddress> "setEscrow(address)" <InvoiceEscrowAddress> ...
 ```
 
-Deploy de `RewardsCatalog` (requiere `PaymentRouter` y `PuntosToken` ya desplegados; a
-diferencia de `InvoiceEscrow` no necesita wiring posterior en ningún otro contrato):
+`RewardsCatalog` deploy (requires `PaymentRouter` and `PuntosToken` already deployed; unlike
+`InvoiceEscrow` it needs no later wiring on any other contract):
 
 ```bash
 cd contracts/solidity
-PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> PUNTOS_TOKEN_ADDRESS=<dirección ya desplegada> \
+PAYMENT_ROUTER_ADDRESS=<already deployed address> PUNTOS_TOKEN_ADDRESS=<already deployed address> \
   forge script script/DeployRewardsCatalog.s.sol:DeployRewardsCatalog \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
 
-Deploy de `GroupOrders` (requiere solo `PaymentRouter` ya desplegado; sin wiring posterior en
-ningún otro contrato):
+`GroupOrders` deploy (requires only `PaymentRouter` already deployed; no later wiring on any other
+contract):
 
 ```bash
 cd contracts/solidity
-PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> \
+PAYMENT_ROUTER_ADDRESS=<already deployed address> \
   forge script script/DeployGroupOrders.s.sol:DeployGroupOrders \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
 
-Deploy de `CreditCertificate` (despliega también el verificador Groth16 autogenerado; no
-necesita ningún otro contrato ya desplegado):
+`CreditCertificate` deploy (also deploys the auto-generated Groth16 verifier; needs no other
+contract already deployed):
 
 ```bash
 cd contracts/solidity
 forge script script/DeployCreditCertificate.s.sol:DeployCreditCertificate \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
-# después: cast send <CreditCertificateAddress> "setOraclePubKey(uint256,uint256)" <ax> <ay> ...
-# (ax/ay salen de frontend/lib/zkOracle.ts::getOraclePubKey() con el ZK_ORACLE_PRIVATE_KEY configurado)
+# then: cast send <CreditCertificateAddress> "setOraclePubKey(uint256,uint256)" <ax> <ay> ...
+# (ax/ay come from frontend/lib/zkOracle.ts::getOraclePubKey() with ZK_ORACLE_PRIVATE_KEY configured)
 ```
 
-Deploy de `CreditLine` (requiere `PaymentRouter` y `CreditCertificate` ya desplegados):
+`CreditLine` deploy (requires `PaymentRouter` and `CreditCertificate` already deployed):
 
 ```bash
 cd contracts/solidity
-PAYMENT_ROUTER_ADDRESS=<dirección ya desplegada> CREDIT_CERTIFICATE_ADDRESS=<dirección ya desplegada> \
+PAYMENT_ROUTER_ADDRESS=<already deployed address> CREDIT_CERTIFICATE_ADDRESS=<already deployed address> \
   forge script script/DeployCreditLine.s.sol:DeployCreditLine \
   --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 ```
 
-### Circuito ZK (CreditCertificate)
+### ZK circuit (CreditCertificate)
 
 ```bash
 cd contracts/circom-credit-certificate
 npm install
 npm run compile   # circom → build/creditCertificate.r1cs + .wasm
-# trusted setup (reusa un Powers of Tau público — ver README, sección "CreditCertificate"):
+# trusted setup (reuses a public Powers of Tau — see the "CreditCertificate" section):
 npx snarkjs groth16 setup build/creditCertificate.r1cs ptau/pot15_final.ptau build/creditCertificate_0000.zkey
 npx snarkjs zkey contribute build/creditCertificate_0000.zkey build/creditCertificate_final.zkey
 npx snarkjs zkey export solidityverifier build/creditCertificate_final.zkey build/CreditCertificateVerifier.sol
-npm test   # 3 tests: prueba válida, score insuficiente, firma incorrecta
+npm test   # 3 tests: valid proof, insufficient score, wrong signature
 ```
 
-Los artefactos que el frontend necesita en runtime (`creditCertificate.wasm`,
-`creditCertificate.zkey`, `verification_key.json`) ya están copiados y committeados en
-`frontend/circuits/` — no hace falta regenerarlos salvo que cambie el circuito.
+The artifacts the frontend needs at runtime (`creditCertificate.wasm`, `creditCertificate.zkey`,
+`verification_key.json`) are already copied and committed in `frontend/circuits/` — there's no need
+to regenerate them unless the circuit changes.
 
-### Contrato Stylus (FiadoScoring)
+### Stylus contract (FiadoScoring)
 
 ```bash
 pnpm run stylus:check
+cd contracts/stylus-fiado-scoring && cargo test
 ```
 
-Deploy (requiere `contracts/stylus-fiado-scoring/.env` con `PRIVATE_KEY` y `RPC_URL`):
+> **New Stylus activations are paused on Arbitrum One, Nova and Sepolia since 2026-10-02**
+> (Security Council emergency action). `cargo stylus check` reports "Stylus activations appear to
+> be paused on this chain", and `cargo stylus deploy` will fail until they're re-enabled. The
+> deployed `FiadoScoring` keeps working and is reused by the USDG stack.
+
+Deploy (once activations resume; requires `contracts/stylus-fiado-scoring/.env` with `PRIVATE_KEY`
+and `RPC_URL`):
 
 ```bash
 cd contracts/stylus-fiado-scoring
 cargo stylus deploy --private-key-path=... --endpoint=https://sepolia-rollup.arbitrum.io/rpc
 ```
 
-Si el constructor lleva argumentos, `--constructor-args` tiene que ir **al final** del
-comando: `cargo-stylus deploy` (0.10.8) tiene `allow_hyphen_values` activado, así que se traga
-cualquier flag que venga después como si fuera otro argumento del constructor.
+If the constructor takes arguments, `--constructor-args` must go **at the end** of the command:
+`cargo-stylus deploy` (0.10.x) has `allow_hyphen_values` enabled, so it swallows any flag that
+comes after it as if it were another constructor argument.
 
 ### Frontend
 
 ```bash
 cp frontend/.env.example frontend/.env.local
-# completar NEXT_PUBLIC_*_ADDRESS con las direcciones desplegadas,
-# ANTHROPIC_API_KEY y ORACLE_PRIVATE_KEY (testnet)
+# fill in NEXT_PUBLIC_*_ADDRESS with the deployed addresses,
+# ANTHROPIC_API_KEY and ORACLE_PRIVATE_KEY (testnet); NEXT_PUBLIC_STABLECOIN_ADDRESS is optional
+# (defaults to USDG on Arbitrum Sepolia)
 pnpm run dev
 ```
 
-Para el login sin wallet y el gas pagado en PUNTOS hacen falta dos cuentas gratuitas más
-(las crea quien opera el proyecto, nunca se pegan en el chat):
+Wallet-less login and gas paid in PUNTOS need two more free accounts (created by whoever operates
+the project, never pasted into a chat):
 
-- [dashboard.privy.io](https://dashboard.privy.io) — crear una app, restringir los métodos de
-  login a email + SMS, copiar el App ID público a `NEXT_PUBLIC_PRIVY_APP_ID`.
-- [dashboard.pimlico.io](https://dashboard.pimlico.io) — API key gratis de testnet, a
+- [dashboard.privy.io](https://dashboard.privy.io) — create an app, restrict the login methods to
+  email + SMS (+ passkey), copy the public App ID into `NEXT_PUBLIC_PRIVY_APP_ID`.
+- [dashboard.pimlico.io](https://dashboard.pimlico.io) — free testnet API key, into
   `NEXT_PUBLIC_PIMLICO_API_KEY`.
-- `NEXT_PUBLIC_PUNTOS_PAYMASTER_ADDRESS` — la dirección de `PuntosPaymaster` desplegado
-  arriba.
+- `NEXT_PUBLIC_PUNTOS_PAYMASTER_ADDRESS` — the address of the `PuntosPaymaster` deployed above.
 
-## Regenerar ABIs para el frontend
+## Regenerating ABIs for the frontend
 
 ```bash
-forge inspect PaymentRouter abi --json > frontend/lib/abis/PaymentRouter.json   # envolver en {"abi": [...]}
-forge inspect PuntosToken abi --json > frontend/lib/abis/PuntosToken.json      # envolver en {"abi": [...]}
-cd contracts/stylus-fiado-scoring && cargo stylus export-abi --json   # copiar el array de salida a
-                                                                       # ../../frontend/lib/abis/FiadoScoring.json,
-                                                                       # envuelto en {"abi": [...]}
+cd contracts/solidity
+for c in PaymentRouter PuntosToken InvoiceEscrow GroupOrders CreditLine RewardsCatalog BeneficioToken CreditCertificate; do
+  forge inspect $c abi --json | python3 -c "import json,sys; json.dump({'abi': json.load(sys.stdin)}, open('../../frontend/lib/abis/$c.json','w'), indent=2)"
+done
+cd ../stylus-fiado-scoring && cargo stylus export-abi --json   # copy the output array into
+                                                               # ../../frontend/lib/abis/FiadoScoring.json,
+                                                               # wrapped in {"abi": [...]}
 ```
 
-`cargo stylus export-abi` necesita `solc` en el `PATH` (Foundry lo descarga vía svm pero no lo
-expone con ese nombre exacto):
+`cargo stylus export-abi` needs `solc` on the `PATH` (Foundry downloads it via svm but doesn't
+expose it under that exact name):
 
 ```bash
 ln -sf ~/.local/share/svm/0.8.26/solc-0.8.26 ~/.local/share/svm/0.8.26/solc
 export PATH="$HOME/.local/share/svm/0.8.26:$PATH"
 ```
 
-**Importante:** el macro `#[public]` de stylus-sdk convierte automáticamente los nombres de
-función snake_case de Rust a camelCase al exportar el ABI de Solidity (p.ej. `record_payment` →
-`recordPayment`). `contracts/solidity/src/interfaces/IFiadoScoring.sol` ya usa los nombres
-camelCase correctos — si cambias la API pública del contrato Rust, vuelve a generar el ABI y
-actualiza la interfaz Solidity para que coincidan.
+**Important:** stylus-sdk's `#[public]` macro automatically converts Rust's snake_case function
+names to camelCase when exporting the Solidity ABI (e.g. `record_payment` → `recordPayment`).
+`contracts/solidity/src/interfaces/IFiadoScoring.sol` already uses the correct camelCase names — if
+you change the Rust contract's public API, regenerate the ABI and update the Solidity interface so
+they match.

@@ -73,6 +73,23 @@ contract MockFiadoScoring is IFiadoScoring {
         escrowAddress = _escrow;
     }
 
+    // Owner-side setters mirroring the Stylus contract, so deploy scripts can be exercised.
+    address public owner;
+    address public paymentRouter;
+    address public aiOracle;
+
+    function setOwner(address _owner) external {
+        owner = _owner;
+    }
+
+    function setPaymentRouter(address router) external {
+        paymentRouter = router;
+    }
+
+    function setAiOracle(address oracle) external {
+        aiOracle = oracle;
+    }
+
     function repayFiado(address bodega, address customer, uint256 amount) external override {
         uint256 deducted = amount > fiadoDebt[bodega][customer] ? fiadoDebt[bodega][customer] : amount;
         fiadoDebt[bodega][customer] -= deducted;

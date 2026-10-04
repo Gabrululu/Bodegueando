@@ -21,10 +21,14 @@ import {
   creditCertificateAddress,
   creditLineAbi,
   creditLineAddress,
+  stablecoinAbi,
+  stablecoinAddress,
+  STABLECOIN_DECIMALS,
 } from "@/lib/contracts";
 import { RISK_COLOR, RISK_LABEL, confianzaLabel, type AiRecommendation } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
 import { sendAndWait, useSmartAccountClient } from "@/lib/smartAccount";
+import { formatPuntos, withStablecoinApproval } from "@/lib/stablecoin";
 import { distanceKm } from "@/lib/distance";
 
 /**
@@ -91,7 +95,8 @@ export function BodegaOwnerPanel() {
   const [claimError, setClaimError] = useState<string | null>(null);
   const [rewardTitle, setRewardTitle] = useState("");
   const [rewardKind, setRewardKind] = useState<"Instant" | "Raffle">("Instant");
-  const [rewardCostPuntos, setRewardCostPuntos] = useState("100");
+  // 1 PUNTO = 1 USD de cashback (2% de cada compra), así que 2 PUNTOS ≈ S/ 340 en compras.
+  const [rewardCostPuntos, setRewardCostPuntos] = useState("2");
   const [rewardAvailableDays, setRewardAvailableDays] = useState("30");
   const [rewardClaimWindowHours, setRewardClaimWindowHours] = useState("24");
   const [isCreatingReward, setIsCreatingReward] = useState(false);
@@ -136,7 +141,10 @@ export function BodegaOwnerPanel() {
   const [issueError, setIssueError] = useState<string | null>(null);
   const [issueConfirmed, setIssueConfirmed] = useState(false);
 
-  const { formatSoles, solesToEth } = useExchangeRate();
+  // Todo se cobra en USDG. Montos de InvoiceEscrow/GroupOrders/CreditLine están en unidades
+  // de USDG (formatStablecoin); FiadoScoring (historial, límite, deuda) y PUNTOS están en USD
+  // con 18 decimales (formatSolesFromUsd). La UI siempre muestra soles.
+  const { formatSolesFromUsd, solesToUsd, formatStablecoin, solesToStablecoin } = useExchangeRate();
 
   const [myLat, setMyLat] = useState<number | null>(null);
   const [myLng, setMyLng] = useState<number | null>(null);
@@ -260,6 +268,32 @@ export function BodegaOwnerPanel() {
     query: { enabled: Boolean(address && fiadoScoringAddress) },
   });
 
+  const stablecoinBalanceQuery = useReadContract({
+    address: stablecoinAddress,
+    abi: stablecoinAbi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address) },
+  });
+  const stablecoinBalance = stablecoinBalanceQuery.data ?? BigInt(0);
+
+  // Una bodega también necesita saldo propio para aportar a pedidos grupales o poner la
+  // garantía de un préstamo, así que pide el mismo saldo de prueba que un comprador.
+  useEffect(() => {
+    if (!address) return;
+    fetch("/api/faucet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.funded) stablecoinBalanceQuery.refetch();
+      })
+      .catch((err) => console.error("[faucet] request failed", err));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address]);
+
   const historyQuery = useReadContract({
     address: fiadoScoringAddress,
     abi: fiadoScoringAbi,
@@ -327,15 +361,15 @@ export function BodegaOwnerPanel() {
     setProposeError(null);
     setProposeConfirmed(false);
     try {
-      const principalWei = parseEther(solesToEth(Number(escrowPrincipalSoles || "0")).toFixed(18));
-      const collateralWei = parseEther(solesToEth(Number(escrowCollateralSoles || "0")).toFixed(18));
+      const principal = solesToStablecoin(escrowPrincipalSoles);
+      const collateral = solesToStablecoin(escrowCollateralSoles);
       const dueDate = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, Math.round(Number(escrowDueDays || "0"))) * 86400);
       await sendAndWait(smartAccountClient, address, [
         {
           address: invoiceEscrowAddress,
           abi: invoiceEscrowAbi,
           functionName: "proposeInvoice",
-          args: [customerAddress, principalWei, collateralWei, dueDate],
+          args: [customerAddress, principal, collateral, dueDate],
         },
       ]);
       setProposeConfirmed(true);
@@ -557,7 +591,7 @@ export function BodegaOwnerPanel() {
     setCreateGroupOrderError(null);
     setCreateGroupOrderConfirmed(false);
     try {
-      const goalWei = parseEther(solesToEth(Number(groupOrderGoalSoles || "0")).toFixed(18));
+      const goal = solesToStablecoin(groupOrderGoalSoles);
       const pledgeDeadline = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, Math.round(Number(groupOrderPledgeDays || "0"))) * 86400);
       const withdrawWindowSeconds = BigInt(Math.max(1, Math.round(Number(groupOrderWithdrawDays || "0"))) * 86400);
       await sendAndWait(smartAccountClient, address, [
@@ -565,7 +599,7 @@ export function BodegaOwnerPanel() {
           address: groupOrdersAddress,
           abi: groupOrdersAbi,
           functionName: "createGroupOrder",
-          args: [groupOrderTitle.trim(), goalWei, pledgeDeadline, withdrawWindowSeconds],
+          args: [groupOrderTitle.trim(), goal, pledgeDeadline, withdrawWindowSeconds],
         },
       ]);
       setCreateGroupOrderConfirmed(true);
@@ -584,13 +618,21 @@ export function BodegaOwnerPanel() {
     setPledgingOrderId(id);
     setGroupOrderActionError(null);
     try {
-      const amountWei = parseEther(solesToEth(Number(pledgeSolesByOrder[id] || "0")).toFixed(18));
-      await sendAndWait(smartAccountClient, address, [
-        { address: groupOrdersAddress, abi: groupOrdersAbi, functionName: "pledge", args: [BigInt(id)], value: amountWei },
-      ]);
+      const amount = solesToStablecoin(pledgeSolesByOrder[id] ?? "");
+      await sendAndWait(
+        smartAccountClient,
+        address,
+        withStablecoinApproval(groupOrdersAddress, amount, {
+          address: groupOrdersAddress,
+          abi: groupOrdersAbi,
+          functionName: "pledge",
+          args: [BigInt(id), amount],
+        }),
+      );
       setPledgeSolesByOrder((prev) => ({ ...prev, [id]: "" }));
       groupOrdersQuery.refetch();
       myPledgesQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setGroupOrderActionError("No se pudo aportar. Revisa que el pedido siga abierto.");
     } finally {
@@ -607,6 +649,7 @@ export function BodegaOwnerPanel() {
         { address: groupOrdersAddress, abi: groupOrdersAbi, functionName: "withdraw", args: [BigInt(id)] },
       ]);
       groupOrdersQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setGroupOrderActionError("No se pudo retirar. Revisa que ya se haya alcanzado la meta y que el plazo siga vigente.");
     } finally {
@@ -624,6 +667,7 @@ export function BodegaOwnerPanel() {
       ]);
       groupOrdersQuery.refetch();
       myPledgesQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setGroupOrderActionError("Todavía no se puede reembolsar este pedido.");
     } finally {
@@ -748,13 +792,18 @@ export function BodegaOwnerPanel() {
     setIsBorrowing(true);
     setBorrowError(null);
     try {
-      const amountWei = parseEther(solesToEth(Number(borrowAmountSoles || "0")).toFixed(18));
-      const collateralWei = (amountWei * BigInt(myTierCollateralBps)) / BigInt(10_000);
-      await sendAndWait(smartAccountClient, address, [
-        { address: creditLineAddress, abi: creditLineAbi, functionName: "borrow", args: [amountWei], value: collateralWei },
-      ]);
+      const amount = solesToStablecoin(borrowAmountSoles);
+      // Misma fórmula que CreditLine.requiredCollateral: se aprueba exactamente esa garantía.
+      const collateral = (amount * BigInt(myTierCollateralBps)) / BigInt(10_000);
+      const borrow = { address: creditLineAddress, abi: creditLineAbi, functionName: "borrow", args: [amount] };
+      await sendAndWait(
+        smartAccountClient,
+        address,
+        collateral > BigInt(0) ? withStablecoinApproval(creditLineAddress, collateral, borrow) : [borrow],
+      );
       loanCountQuery.refetch();
       loansQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setBorrowError("No se pudo pedir el préstamo. Revisa que el fondo tenga suficiente disponible.");
     } finally {
@@ -762,16 +811,25 @@ export function BodegaOwnerPanel() {
     }
   }
 
-  async function handleRepayLoan(loanId: number, principal: bigint) {
+  async function handleRepayLoan(loanId: number, principal: bigint, loanInterestBps: bigint) {
     if (!creditLineAddress || !smartAccountClient || !address) return;
     setRepayingLoanId(loanId);
     setLoanActionError(null);
     try {
-      const owed = principal + (principal * BigInt(interestBps)) / BigInt(10_000);
-      await sendAndWait(smartAccountClient, address, [
-        { address: creditLineAddress, abi: creditLineAbi, functionName: "repay", args: [BigInt(loanId)], value: owed },
-      ]);
+      // Misma fórmula que CreditLine.amountOwed, con el interés fijado en ese préstamo.
+      const owed = principal + (principal * loanInterestBps) / BigInt(10_000);
+      await sendAndWait(
+        smartAccountClient,
+        address,
+        withStablecoinApproval(creditLineAddress, owed, {
+          address: creditLineAddress,
+          abi: creditLineAbi,
+          functionName: "repay",
+          args: [BigInt(loanId)],
+        }),
+      );
       loansQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setLoanActionError("No se pudo pagar el préstamo. Intenta de nuevo.");
     } finally {
@@ -835,6 +893,7 @@ export function BodegaOwnerPanel() {
     historyQuery.refetch();
     totalOutstandingQuery.refetch();
     availableFiadoQuery.refetch();
+    stablecoinBalanceQuery.refetch();
   };
 
   const isValidCustomerCodeFormat = /^\d{6,9}$/.test(customerCodeInput.trim());
@@ -959,13 +1018,13 @@ export function BodegaOwnerPanel() {
     setFiarError(null);
     setFiarConfirmed(false);
     try {
-      const ethAmount = solesToEth(Number(fiarAmountSoles || "0"));
+      const usdAmount = solesToUsd(Number(fiarAmountSoles || "0"));
       await sendAndWait(smartAccountClient, address, [
         {
           address: fiadoScoringAddress,
           abi: fiadoScoringAbi,
           functionName: "extendFiado",
-          args: [customerAddress, parseEther(ethAmount.toFixed(18))],
+          args: [customerAddress, parseEther(usdAmount.toFixed(18))],
         },
       ]);
       setFiarConfirmed(true);
@@ -1107,15 +1166,15 @@ export function BodegaOwnerPanel() {
   }
 
   const score = Number((scoreQuery.data as bigint | undefined) ?? BigInt(0));
-  const limitEth = Number((limitQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18;
+  const limitUsd = Number((limitQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18;
   const aiAdjusted = Boolean((aiInfoQuery.data as [boolean, bigint] | undefined)?.[0]);
   const confianza = confianzaLabel(score);
 
   const [paymentAmounts, paymentTimestamps] = (historyQuery.data as [bigint[], bigint[]] | undefined) ?? [[], []];
   const payments = paymentAmounts
-    .map((amount, i) => ({ amountEth: Number(amount) / 1e18, timestamp: Number(paymentTimestamps[i] ?? BigInt(0)) }))
+    .map((amount, i) => ({ amountUsd: Number(amount) / 1e18, timestamp: Number(paymentTimestamps[i] ?? BigInt(0)) }))
     .sort((a, b) => b.timestamp - a.timestamp);
-  const totalReceivedEth = payments.reduce((sum, p) => sum + p.amountEth, 0);
+  const totalReceivedUsd = payments.reduce((sum, p) => sum + p.amountUsd, 0);
 
   return (
     <div className="flex w-full max-w-md flex-col gap-8 text-left">
@@ -1194,16 +1253,28 @@ export function BodegaOwnerPanel() {
         ) : (
           <>
             <div className={highlightBoxClass}>
+              <p className="text-xs text-[#6b6d64]">Tu saldo</p>
+              <p className="text-2xl font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+                {stablecoinBalanceQuery.isLoading ? "…" : formatStablecoin(stablecoinBalance)}
+              </p>
+              <p className="text-xs text-[#6b6d64]">
+                Guardado en dólares digitales (USDG):{" "}
+                {stablecoinBalanceQuery.isLoading
+                  ? "…"
+                  : `US$ ${(Number(stablecoinBalance) / 10 ** STABLECOIN_DECIMALS).toFixed(2)}`}
+              </p>
+            </div>
+            <div className={highlightBoxClass}>
               <p className="text-xs text-[#6b6d64]">Total recibido (últimos {payments.length} pagos)</p>
               <p className="text-2xl font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
-                {formatSoles(totalReceivedEth)}
+                {formatSolesFromUsd(totalReceivedUsd)}
               </p>
             </div>
             <ul className="flex flex-col divide-y divide-black/[0.06] overflow-hidden rounded-xl border border-black/10">
               {payments.map((p, i) => (
                 <li key={i} className="flex items-center justify-between gap-3 bg-white px-3 py-2 text-sm">
                   <span className="text-[#6b6d64]">{formatPaymentDate(p.timestamp)}</span>
-                  <span className="font-medium text-[#0a0a0b]">{formatSoles(p.amountEth)}</span>
+                  <span className="font-medium text-[#0a0a0b]">{formatSolesFromUsd(p.amountUsd)}</span>
                 </li>
               ))}
             </ul>
@@ -1238,7 +1309,7 @@ export function BodegaOwnerPanel() {
             <div className={highlightBoxClass}>
               <p className="text-xs text-[#6b6d64]">Fiado que le ofreces a cada cliente ahora mismo</p>
               <p className="text-2xl font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
-                {limitQuery.isLoading ? "…" : formatSoles(limitEth)}
+                {limitQuery.isLoading ? "…" : formatSolesFromUsd(limitUsd)}
               </p>
               <div className="mt-1 flex items-center gap-2 text-sm">
                 <span className="text-[#6b6d64]">Confianza:</span>
@@ -1260,7 +1331,7 @@ export function BodegaOwnerPanel() {
                 <p className="text-[#0a0a0b]">
                   Nuevo límite:{" "}
                   <span className="font-medium">
-                    {formatSoles(Number(aiResult.recommendation.creditLimitWei) / 1e18)}
+                    {formatSolesFromUsd(Number(aiResult.recommendation.creditLimitWei) / 1e18)}
                   </span>{" "}
                   · Riesgo:{" "}
                   <span className={`font-medium ${RISK_COLOR[aiResult.recommendation.riskLevel]}`}>
@@ -1286,13 +1357,13 @@ export function BodegaOwnerPanel() {
               <p className="text-lg font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
                 {totalOutstandingQuery.isLoading
                   ? "…"
-                  : formatSoles(Number((totalOutstandingQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18)}
+                  : formatSolesFromUsd(Number((totalOutstandingQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18)}
               </p>
               <p className="mt-1 text-xs text-[#6b6d64]">
                 Espacio disponible para fiar más:{" "}
                 {availableFiadoQuery.isLoading
                   ? "…"
-                  : formatSoles(Number((availableFiadoQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18)}
+                  : formatSolesFromUsd(Number((availableFiadoQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18)}
               </p>
             </div>
 
@@ -1402,11 +1473,11 @@ export function BodegaOwnerPanel() {
               {myInvoices.map((inv) => (
                 <div key={inv.id} className={highlightBoxClass}>
                   <p className="text-xs text-[#6b6d64]">
-                    {formatSoles(Number(inv.principal) / 1e18)} · garantía {formatSoles(Number(inv.collateral) / 1e18)} · vence{" "}
+                    {formatStablecoin(inv.principal)} · garantía {formatStablecoin(inv.collateral)} · vence{" "}
                     {formatPaymentDate(Number(inv.dueDate))}
                   </p>
                   <p className="text-xs text-[#6b6d64]">
-                    Pagado: {formatSoles(Number(inv.repaidAmount) / 1e18)} · Estado: {INVOICE_STATUS_LABEL[inv.status]}
+                    Pagado: {formatStablecoin(inv.repaidAmount)} · Estado: {INVOICE_STATUS_LABEL[inv.status]}
                   </p>
                   {inv.status === 1 && (
                     <button
@@ -1463,12 +1534,16 @@ export function BodegaOwnerPanel() {
                 type="number"
                 inputMode="decimal"
                 min="0"
-                step="1"
+                step="0.5"
                 value={rewardCostPuntos}
                 onChange={(e) => setRewardCostPuntos(e.target.value)}
                 className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
               />
             </div>
+            <p className="text-xs text-[#6b6d64]">
+              Equivale a {formatSolesFromUsd(Number(rewardCostPuntos || 0))} en puntos — un cliente los junta comprando
+              unos {formatSolesFromUsd(Number(rewardCostPuntos || 0) * 50)}.
+            </p>
             <div className="flex items-center gap-2">
               <span className="text-sm text-[#6b6d64]">
                 {rewardKind === "Instant" ? "Disponible por (días)" : "Cierra el sorteo en (días)"}
@@ -1509,7 +1584,7 @@ export function BodegaOwnerPanel() {
                 <div key={r.id} className={highlightBoxClass}>
                   <p className="text-sm font-medium text-[#0a0a0b]">{r.title}</p>
                   <p className="text-xs text-[#6b6d64]">
-                    {REWARD_KIND_LABEL[r.kind]} · {(Number(r.pointCost) / 1e18).toFixed(0)} PUNTOS · {r.active ? "activo" : "pausado"}
+                    {REWARD_KIND_LABEL[r.kind]} · {formatPuntos(r.pointCost)} PUNTOS (vale {formatSolesFromUsd(Number(r.pointCost) / 1e18)}) · {r.active ? "activo" : "pausado"}
                     {r.kind === 1 && r.drawn ? " · sorteado" : ""}
                   </p>
                   <div className="mt-2 flex gap-2">
@@ -1659,14 +1734,14 @@ export function BodegaOwnerPanel() {
                   <div key={o.id} className={highlightBoxClass}>
                     <p className="text-sm font-medium text-[#0a0a0b]">{o.title}</p>
                     <p className="text-xs text-[#6b6d64]">
-                      {formatSoles(Number(o.pledged) / 1e18)} de {formatSoles(Number(o.goal) / 1e18)} · cierra{" "}
+                      {formatStablecoin(o.pledged)} de {formatStablecoin(o.goal)} · cierra{" "}
                       {formatPaymentDate(Number(o.pledgeDeadline))}
                       {isMine ? " · tu pedido" : ""}
                       {o.withdrawn ? " · retirado" : ""}
                       {o.distanceFromMeKm !== null ? ` · a ${o.distanceFromMeKm.toFixed(1)} km` : ""}
                     </p>
                     {o.myPledge > BigInt(0) && (
-                      <p className="text-xs text-[#6b6d64]">Aportaste: {formatSoles(Number(o.myPledge) / 1e18)}</p>
+                      <p className="text-xs text-[#6b6d64]">Aportaste: {formatStablecoin(o.myPledge)}</p>
                     )}
 
                     {!o.withdrawn && (
@@ -1725,7 +1800,7 @@ export function BodegaOwnerPanel() {
                       <div key={o.id} className={highlightBoxClass}>
                         <p className="text-sm font-medium text-[#0a0a0b]">{o.title}</p>
                         <p className="text-xs text-[#6b6d64]">
-                          {formatSoles(Number(o.pledged) / 1e18)} de {formatSoles(Number(o.goal) / 1e18)} · cierra{" "}
+                          {formatStablecoin(o.pledged)} de {formatStablecoin(o.goal)} · cierra{" "}
                           {formatPaymentDate(Number(o.pledgeDeadline))}
                           {o.withdrawn ? " · retirado" : ""}
                         </p>
@@ -1805,6 +1880,14 @@ export function BodegaOwnerPanel() {
                   className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                 />
               </div>
+              {Number(borrowAmountSoles) > 0 && (
+                <p className="text-xs text-[#6b6d64]">
+                  Pones de garantía{" "}
+                  {formatSolesFromUsd((solesToUsd(Number(borrowAmountSoles)) * myTierCollateralBps) / 10_000)} y
+                  devuelves {formatSolesFromUsd(solesToUsd(Number(borrowAmountSoles)) * (1 + interestBps / 10_000))} en
+                  30 días (incluye {(interestBps / 100).toFixed(0)}% de interés). La garantía vuelve cuando pagas.
+                </p>
+              )}
               <button onClick={handleBorrow} disabled={isBorrowing} className={outlineButtonClass}>
                 {isBorrowing ? "Pidiendo..." : "Pedir préstamo"}
               </button>
@@ -1818,11 +1901,19 @@ export function BodegaOwnerPanel() {
               {myLoans.map((loan) => (
                 <div key={loan.id} className={highlightBoxClass}>
                   <p className="text-xs text-[#6b6d64]">
-                    {formatSoles(Number(loan.principal) / 1e18)} · garantía {formatSoles(Number(loan.collateral) / 1e18)} · vence{" "}
+                    {formatStablecoin(loan.principal)} · garantía {formatStablecoin(loan.collateral)} · vence{" "}
                     {formatPaymentDate(Number(loan.dueDate))}
                   </p>
+                  <p className="text-xs text-[#6b6d64]">
+                    A pagar:{" "}
+                    <span className="font-medium text-[#0a0a0b]">
+                      {formatStablecoin(loan.principal + (loan.principal * loan.interestBps) / BigInt(10_000), {
+                        withUsd: true,
+                      })}
+                    </span>
+                  </p>
                   <button
-                    onClick={() => handleRepayLoan(loan.id, loan.principal)}
+                    onClick={() => handleRepayLoan(loan.id, loan.principal, loan.interestBps)}
                     disabled={repayingLoanId === loan.id}
                     className={`${outlineButtonClass} mt-2`}
                   >

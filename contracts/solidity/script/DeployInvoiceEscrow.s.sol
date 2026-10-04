@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
+import {StablecoinScript} from "./StablecoinScript.sol";
 import {InvoiceEscrow, IBodegaRegistry} from "../src/InvoiceEscrow.sol";
 import {IFiadoScoring} from "../src/interfaces/IFiadoScoring.sol";
 
@@ -15,7 +16,7 @@ import {IFiadoScoring} from "../src/interfaces/IFiadoScoring.sol";
 ///   PAYMENT_ROUTER_ADDRESS=... FIADO_SCORING_ADDRESS=... \
 ///   forge script script/DeployInvoiceEscrow.s.sol:DeployInvoiceEscrow \
 ///     --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
-contract DeployInvoiceEscrow is Script {
+contract DeployInvoiceEscrow is StablecoinScript {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
@@ -24,8 +25,9 @@ contract DeployInvoiceEscrow is Script {
 
         vm.startBroadcast(deployerKey);
 
-        InvoiceEscrow escrow =
-            new InvoiceEscrow(deployer, IBodegaRegistry(paymentRouterAddress), IFiadoScoring(fiadoScoringAddress));
+        InvoiceEscrow escrow = new InvoiceEscrow(
+            deployer, IBodegaRegistry(paymentRouterAddress), IFiadoScoring(fiadoScoringAddress), _stablecoin()
+        );
 
         vm.stopBroadcast();
 

@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="Resumen visual de una página de la arquitectura on-chain de Bodegueando en Arbitrum, con diagrama del flujo de pago y contratos desplegados." />
+<meta name="description" content="One-page visual overview of Bodegueando's on-chain architecture on Arbitrum: payment flow diagram, deployed contracts, business model and roadmap." />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%8F%AA%3C/text%3E%3C/svg%3E" />
-<title>Bodegueando — Arquitectura</title>
+<title>Bodegueando Architecture</title>
 <style>
   :root {
     --bg: #fafaf7;
@@ -322,6 +322,39 @@
   footer a { text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
   footer a:hover { text-decoration-color: currentColor; }
 
+  /* ---------- language toggle ---------- */
+  .top-right { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .lang-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    padding: 2px;
+    background: var(--surface);
+  }
+  .lang-toggle button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--ink-muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 5px 11px;
+    border-radius: 999px;
+    cursor: pointer;
+    min-height: 28px;
+  }
+  .lang-toggle button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .lang-toggle button:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+
+  @media (max-width: 560px) {
+    .wrap { padding: 32px 16px 72px; }
+    .stripe { grid-template-columns: 1fr; gap: 4px; }
+    .rm-item { flex-direction: column; gap: 4px; }
+    .rm-status { width: auto; }
+  }
+
   @media (prefers-reduced-motion: no-preference) {
     .card, nav.top-links a { transition: border-color 0.15s ease, color 0.15s ease; }
     .card:hover { border-color: var(--border-strong); }
@@ -348,279 +381,402 @@
       </svg>
       <span>Bodegueando</span>
     </div>
-    <nav class="top-links">
-      <a href="https://github.com/Gabrululu/Bodegueando" target="_blank" rel="noopener">Repositorio</a>
-      <a href="https://github.com/Gabrululu/Bodegueando/blob/main/README.md" target="_blank" rel="noopener">README</a>
-      <a href="https://github.com/Gabrululu/Bodegueando/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">Arquitectura completa</a>
-    </nav>
+    <div class="top-right">
+      <nav class="top-links">
+        <a href="https://github.com/Gabrululu/Bodegueando" target="_blank" rel="noopener" data-i18n="nav.repo">Repository</a>
+        <a href="https://github.com/Gabrululu/Bodegueando/blob/main/README.md" target="_blank" rel="noopener">README</a>
+        <a href="https://github.com/Gabrululu/Bodegueando/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener" data-i18n="nav.arch">Full architecture</a>
+      </nav>
+      <div class="lang-toggle" role="group" aria-label="Language / Idioma">
+        <button type="button" data-lang="en" aria-pressed="true" lang="en">EN</button>
+        <button type="button" data-lang="es" aria-pressed="false" lang="es">ES</button>
+      </div>
+    </div>
   </header>
 
   <section class="hero" style="margin-top:0;">
-    <p class="eyebrow">Arquitectura</p>
-    <h1 style="margin-top:14px;">Cobrar, ganar puntos y fiar,<br /><span class="accentitalic">con Arbitrum por dentro.</span></h1>
-    <p class="lede">
-      Bodegueando digitaliza la bodega de barrio sin pedirle que cambie cómo cobra. Por encima
-      de cada venta en soles, una capa on-chain en Arbitrum registra el pago, acuña cashback y
-      construye el historial que hoy no existe para este segmento — todo desplegado, verificado
-      y probado con transacciones reales en Arbitrum Sepolia, no en un entorno simulado.
+    <p class="eyebrow" data-i18n="hero.eyebrow">Architecture</p>
+    <h1 style="margin-top:14px;" data-i18n="hero.title">Get paid, earn points and extend credit,<br /><span class="accentitalic">with Arbitrum under the hood.</span></h1>
+    <p class="lede" data-i18n="hero.lede">
+      Bodegueando digitizes the Peruvian corner store (<em>bodega</em>) without asking it to change
+      how it gets paid. On top of every sale in soles, an on-chain layer on Arbitrum settles the
+      payment in USDG, mints cashback and builds the financial history this segment has never had —
+      all deployed, verified and tested with real transactions on Arbitrum Sepolia, not in a
+      simulated environment.
     </p>
     <div class="hero-meta">
-      <div><span class="num">11</span><span class="lbl">contratos desplegados</span></div>
-      <div><span class="num">227+</span><span class="lbl">tests (Rust + Solidity + circuito)</span></div>
-      <div><span class="num">1</span><span class="lbl">contrato Stylus (Rust)</span></div>
-      <div><span class="num">0%</span><span class="lbl">comisión por cobrar</span></div>
+      <div><span class="num">11</span><span class="lbl" data-i18n="hero.m1">deployed contracts</span></div>
+      <div><span class="num">227+</span><span class="lbl" data-i18n="hero.m2">tests (Rust + Solidity + circuit)</span></div>
+      <div><span class="num">USDG</span><span class="lbl" data-i18n="hero.m3">settlement stablecoin (Paxos)</span></div>
+      <div><span class="num">0%</span><span class="lbl" data-i18n="hero.m4">fee to get paid</span></div>
     </div>
   </section>
 
   <section>
-    <p class="eyebrow">Mecanismo</p>
-    <h2>De un pago con el celular a un cashback on-chain</h2>
-    <p class="dek">
-      El bodeguero y el cliente nunca ven "gas", "wallet" ni una dirección — por dentro, cada
-      pago es una <code>UserOperation</code> patrocinada (ERC-4337) que un contrato routea,
-      acuña puntos, registra el historial de fiado y avisa por Telegram, en una sola firma.
+    <p class="eyebrow" data-i18n="mech.eyebrow">Mechanism</p>
+    <h2 data-i18n="mech.title">From a phone payment to on-chain cashback</h2>
+    <p class="dek" data-i18n="mech.dek">
+      Neither the shopkeeper nor the customer ever sees "gas", "wallet" or an address. Under the
+      hood, every payment is a sponsored <code>UserOperation</code> (ERC-4337) that a contract routes
+      in USDG, mints points for, records in the credit history and announces on Telegram — all with
+      a single signature.
     </p>
 
     <figure class="diagram">
-      <svg viewBox="0 0 1120 540" role="img" aria-label="Diagrama: un pago va del celular del cliente, por login sin wallet y una UserOperation patrocinada por el paymaster, hasta PaymentRouter en Arbitrum, que acuña cashback en PuntosToken, registra el historial en FiadoScoring y avisa por Telegram; FiadoScoring además intercambia datos con un oráculo de IA que solo puede subir el límite hasta el doble del heurístico.">
+      <svg viewBox="0 0 1120 540" role="img" data-i18n-aria="mech.aria" aria-label="Diagram: a payment goes from the customer's phone, through wallet-less login and a UserOperation sponsored by the paymaster, to PaymentRouter on Arbitrum, which settles in USDG, mints cashback in PuntosToken, records the history in FiadoScoring and notifies on Telegram; FiadoScoring also exchanges data with an AI oracle that can raise the limit at most to twice the heuristic.">
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="currentColor" style="color:var(--ink-faint)"></path>
           </marker>
         </defs>
 
-        <!-- A: Cliente/Bodeguero -->
         <rect x="16" y="196" width="150" height="72" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
-        <text x="91" y="226" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">Cliente /</text>
-        <text x="91" y="243" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">Bodeguero</text>
-        <text x="91" y="259" text-anchor="middle" class="diagram-label" font-size="10">celular, sin wallet</text>
+        <text x="91" y="226" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700" data-i18n="dg.a1">Customer /</text>
+        <text x="91" y="243" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700" data-i18n="dg.a2">Shopkeeper</text>
+        <text x="91" y="259" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.a3">phone, no wallet</text>
 
-        <!-- arrow A->B -->
         <line x1="166" y1="232" x2="228" y2="232" class="diagram-line" stroke-width="1.3" marker-end="url(#arrow)"></line>
         <text x="197" y="222" text-anchor="middle" class="diagram-label" font-size="10">login</text>
 
-        <!-- B: Smart Account -->
         <rect x="228" y="188" width="190" height="88" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
         <text x="323" y="216" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">Smart Account</text>
         <text x="323" y="233" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">(ERC-4337)</text>
-        <text x="323" y="251" text-anchor="middle" class="diagram-label" font-size="10">wallet embebida,</text>
-        <text x="323" y="264" text-anchor="middle" class="diagram-label" font-size="10">firma la wallet de Privy</text>
+        <text x="323" y="251" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.b1">embedded wallet,</text>
+        <text x="323" y="264" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.b2">signed by the Privy wallet</text>
 
-        <!-- arrow B->C -->
         <line x1="418" y1="232" x2="480" y2="232" class="diagram-line" stroke-width="1.3" marker-end="url(#arrow)"></line>
         <text x="449" y="222" text-anchor="middle" class="diagram-label" font-size="10">UserOperation</text>
 
-        <!-- C: Bundler + Paymaster -->
         <rect x="480" y="180" width="215" height="104" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
         <text x="587" y="207" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">Bundler (Pimlico) +</text>
         <text x="587" y="224" text-anchor="middle" class="diagram-text" font-size="13" font-weight="700">PuntosPaymaster.sol</text>
-        <text x="587" y="242" text-anchor="middle" class="diagram-label" font-size="10">gas patrocinado —</text>
-        <text x="587" y="255" text-anchor="middle" class="diagram-label" font-size="10">bodega: siempre gratis</text>
-        <text x="587" y="268" text-anchor="middle" class="diagram-label" font-size="10">comprador: 5 tx gratis, después PUNTOS</text>
+        <text x="587" y="242" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.c1">sponsored gas —</text>
+        <text x="587" y="255" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.c2">bodega: always free</text>
+        <text x="587" y="268" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.c3">buyer: 5 free tx, then PUNTOS</text>
 
-        <!-- arrow C->D -->
         <line x1="695" y1="232" x2="757" y2="232" class="diagram-line" stroke-width="1.3" marker-end="url(#arrow)"></line>
 
-        <!-- D: PaymentRouter (hub, accent) -->
         <rect x="757" y="196" width="168" height="72" rx="12" class="node-accent-fill node-accent-stroke" stroke-width="1.4"></rect>
         <text x="841" y="228" text-anchor="middle" class="diagram-text-accent" font-size="13.5" font-weight="800">PaymentRouter</text>
-        <text x="841" y="245" text-anchor="middle" class="diagram-text-accent" font-size="10" opacity="0.75">Arbitrum · verificado</text>
+        <text x="841" y="245" text-anchor="middle" class="diagram-text-accent" font-size="10" opacity="0.75" data-i18n="dg.d1">Arbitrum · settles in USDG</text>
 
-        <!-- arrow D->E (up to PuntosToken) -->
         <path d="M925,210 C965,190 985,160 1000,132" class="diagram-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"></path>
         <text x="990" y="172" text-anchor="middle" class="diagram-label" font-size="10">mint cashback</text>
 
-        <!-- E: PuntosToken -->
         <rect x="945" y="60" width="150" height="66" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
         <text x="1020" y="87" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700">PuntosToken</text>
-        <text x="1020" y="103" text-anchor="middle" class="diagram-label" font-size="10">ERC-20, cashback 2%</text>
+        <text x="1020" y="103" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.e1">ERC-20, 2% cashback</text>
 
-        <!-- arrow D->F (down to FiadoScoring) -->
         <path d="M925,254 C965,278 985,300 1000,322" class="diagram-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"></path>
-        <text x="994" y="300" text-anchor="middle" class="diagram-label" font-size="10">registra pago</text>
+        <text x="994" y="300" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.f0">records payment</text>
 
-        <!-- F: FiadoScoring -->
         <rect x="945" y="322" width="150" height="72" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
         <text x="1020" y="350" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700">FiadoScoring</text>
         <text x="1020" y="366" text-anchor="middle" class="diagram-label" font-size="10">Stylus (Rust) · score</text>
-        <text x="1020" y="380" text-anchor="middle" class="diagram-label" font-size="10">y fiado por cliente</text>
+        <text x="1020" y="380" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.f1">and per-customer credit</text>
 
-        <!-- arrow D -> G (Telegram, down) -->
         <path d="M841,268 C841,320 780,350 720,368" class="diagram-line" stroke-width="1.3" fill="none" marker-end="url(#arrow)"></path>
-        <text x="778" y="345" text-anchor="middle" class="diagram-label" font-size="10">avisa el pago</text>
+        <text x="778" y="345" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.g0">payment alert</text>
 
-        <!-- G: Bot Telegram -->
         <rect x="560" y="368" width="160" height="64" rx="12" class="node-fill node-stroke" stroke-width="1"></rect>
-        <text x="640" y="394" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700">Bot de Telegram</text>
-        <text x="640" y="410" text-anchor="middle" class="diagram-label" font-size="10">webhook, en soles</text>
+        <text x="640" y="394" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700" data-i18n="dg.g1">Telegram bot</text>
+        <text x="640" y="410" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.g2">webhook, in soles</text>
 
-        <!-- F <-> H dashed loop: Oráculo IA -->
         <path d="M945,388 C880,418 840,438 800,450" class="diagram-line-dashed" stroke-width="1.2" fill="none" marker-end="url(#arrow)"></path>
         <path d="M800,470 C840,476 880,462 945,422" class="diagram-line-dashed" stroke-width="1.2" fill="none" marker-end="url(#arrow)"></path>
-        <text x="875" y="440" text-anchor="middle" class="diagram-label" font-size="10">historial →</text>
-        <text x="875" y="490" text-anchor="middle" class="diagram-label" font-size="10">← ajuste ≤ 2×</text>
+        <text x="875" y="440" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.h0">history →</text>
+        <text x="875" y="490" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.h1">← adjustment ≤ 2×</text>
 
-        <!-- H: Oráculo IA -->
         <rect x="640" y="446" width="160" height="56" rx="12" class="node-fill node-stroke" stroke-width="1" stroke-dasharray="3 3"></rect>
-        <text x="720" y="471" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700">Oráculo de IA</text>
-        <text x="720" y="487" text-anchor="middle" class="diagram-label" font-size="10">Claude · acotado on-chain</text>
+        <text x="720" y="471" text-anchor="middle" class="diagram-text" font-size="12.5" font-weight="700" data-i18n="dg.h2">AI oracle</text>
+        <text x="720" y="487" text-anchor="middle" class="diagram-label" font-size="10" data-i18n="dg.h3">Claude · bounded on-chain</text>
       </svg>
-      <figcaption>
-        Un pago sale del celular del cliente sin que vea gas ni wallet, patrocinado por
-        <code>PuntosPaymaster</code>, y termina repartido en tres efectos on-chain — cashback,
-        historial de fiado, aviso por Telegram — más un circuit breaker que limita cuánto puede
-        ajustar la IA el límite de fiado sin historial real detrás.
+      <figcaption data-i18n="mech.caption">
+        A payment leaves the customer's phone without them ever seeing gas or a wallet, sponsored by
+        <code>PuntosPaymaster</code>, and ends up as three on-chain effects — cashback, credit
+        history, a Telegram alert — plus a circuit breaker that limits how far the AI can move the
+        credit limit without real history to back it.
       </figcaption>
     </figure>
   </section>
 
   <section>
-    <p class="eyebrow">On-chain — Arbitrum Sepolia</p>
-    <h2>Once contratos, cada uno con un trabajo puntual</h2>
-    <p class="dek">
-      Todos verificados — Solidity con código fuente legible en Arbiscan, <code>FiadoScoring</code>
-      con un build reproducible vía <code>cargo stylus verify</code>.
+    <p class="eyebrow" data-i18n="chain.eyebrow">On-chain — Arbitrum Sepolia</p>
+    <h2 data-i18n="chain.title">Eleven contracts, each with one specific job</h2>
+    <p class="dek" data-i18n="chain.dek">
+      All verified — Solidity with readable source on Arbiscan, <code>FiadoScoring</code> with a
+      reproducible build via <code>cargo stylus verify</code>. Everything that moves money settles
+      in Paxos USDG.
     </p>
     <div class="grid">
 
       <div class="card">
         <div class="name">PaymentRouter</div>
-        <div class="desc">Recibe cada pago, acuña cashback, registra el historial y da de alta bodegas self-service.</div>
-        <div class="addr"><span>0xdb1f…191F</span><a href="https://sepolia.arbiscan.io/address/0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.router">Takes every payment in USDG straight to the bodega, mints cashback, records the history and onboards bodegas self-service.</div>
+        <div class="addr"><span>0xdb1f…191F</span><a href="https://sepolia.arbiscan.io/address/0xdb1fb6EA9eE8e8E0cF7e1B2374aa1D7571E9191F#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">FiadoScoring <span class="mono" style="color:var(--ink-faint);font-weight:400;">· Stylus</span></div>
-        <div class="desc">Score y límite de fiado heurístico en Rust/WASM — el único contrato que no es Solidity, por el costo del cómputo repetido.</div>
-        <div class="addr"><span>0x22FD…80B2</span><a href="https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.fiado">Heuristic credit score and limit in Rust/WASM — the only non-Solidity contract, because of the cost of recomputing it on every payment.</div>
+        <div class="addr"><span>0x22FD…80B2</span><a href="https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">PuntosToken</div>
-        <div class="desc">ERC-20 de cashback, libre y transferible — se gana pagando, se gasta en gas o en el catálogo de beneficios.</div>
-        <div class="addr"><span>0x2bd8…12de</span><a href="https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.puntos">Cashback ERC-20 (1 PUNTO = 1 USD of cashback), free and transferable — earned by paying, spent on gas or in the rewards catalog.</div>
+        <div class="addr"><span>0x2bd8…12de</span><a href="https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">PuntosPaymaster</div>
-        <div class="desc">Paymaster ERC-4337: patrocina siempre a las bodegas y las primeras 5 transacciones de cada comprador.</div>
-        <div class="addr"><span>0xa00d…6403</span><a href="https://sepolia.arbiscan.io/address/0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.paymaster">ERC-4337 paymaster: always sponsors bodegas and each buyer's first 5 transactions, then charges gas in PUNTOS.</div>
+        <div class="addr"><span>0xa00d…6403</span><a href="https://sepolia.arbiscan.io/address/0xa00d04374BBE8002c9F1CC55AA2F1CAA658a6403#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">InvoiceEscrow</div>
-        <div class="desc">Fiado con garantía parcial — vía adicional para montos donde la bodega prefiere pedir un depósito.</div>
-        <div class="addr"><span>0x9903…7a4</span><a href="https://sepolia.arbiscan.io/address/0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.escrow">Store credit with partial collateral — an extra path for amounts where the bodega prefers to ask for a deposit.</div>
+        <div class="addr"><span>0x9903…7a4</span><a href="https://sepolia.arbiscan.io/address/0x990309bB3e9C8F066475e3a3f02a3df2707BD7a4#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">RewardsCatalog</div>
-        <div class="desc">Catálogo de beneficios por bodega, pagado en PUNTOS y canjeable en cualquier bodega de la red.</div>
-        <div class="addr"><span>0x0c07…44a2f</span><a href="https://sepolia.arbiscan.io/address/0x0c07b1b63aAbAD36d15877D80f10411534C44a2f#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.rewards">Per-bodega rewards catalog, paid in PUNTOS and redeemable at any bodega in the network.</div>
+        <div class="addr"><span>0x0c07…44a2f</span><a href="https://sepolia.arbiscan.io/address/0x0c07b1b63aAbAD36d15877D80f10411534C44a2f#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">GroupOrders</div>
-        <div class="desc">Compras conjuntas entre bodegas cercanas para alcanzar el pedido mínimo de un distribuidor.</div>
-        <div class="addr"><span>0xfA47…2EB0</span><a href="https://sepolia.arbiscan.io/address/0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.group">Joint purchases between nearby bodegas to reach a distributor's minimum order.</div>
+        <div class="addr"><span>0xfA47…2EB0</span><a href="https://sepolia.arbiscan.io/address/0xfA478AFe592f8DA4dF425dd53a294e1d616b2EB0#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">CreditCertificate</div>
-        <div class="desc">Certificado de crédito con Zero-Knowledge (Circom/Groth16) — "score ≥ 700" sin revelar la cifra.</div>
-        <div class="addr"><span>0xc425…8828</span><a href="https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.cert">Zero-Knowledge credit certificate (Circom/Groth16) — "score ≥ 700" without revealing the number.</div>
+        <div class="addr"><span>0xc425…8828</span><a href="https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">Groth16Verifier</div>
-        <div class="desc">Verificador ZK autogenerado por <code>snarkjs</code> — sin una línea editada a mano.</div>
-        <div class="addr"><span>0x6a61…359fb</span><a href="https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.verifier">ZK verifier auto-generated by <code>snarkjs</code> — not a single line edited by hand.</div>
+        <div class="addr"><span>0x6a61…359fb</span><a href="https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">CreditLine</div>
-        <div class="desc">Línea de crédito on-chain que consume el certificado ZK — menos garantía cuanto mejor el score probado.</div>
-        <div class="addr"><span>0x7135…4F29</span><a href="https://sepolia.arbiscan.io/address/0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.credit">On-chain credit line that consumes the ZK certificate — the better the proven score, the less collateral.</div>
+        <div class="addr"><span>0x7135…4F29</span><a href="https://sepolia.arbiscan.io/address/0x7135EDf3230ddEfbcb9FE520B0D177e161a74F29#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">BeneficioToken</div>
-        <div class="desc">PoC de programas sociales: token restringido, solo gastable en una bodega registrada, nunca revendible.</div>
-        <div class="addr"><span>0x1ffb…F8Bc</span><a href="https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code" target="_blank" rel="noopener">ver ↗</a></div>
+        <div class="desc" data-i18n="c.benefit">Social-program PoC: a restricted token, spendable only at a registered bodega, never resellable.</div>
+        <div class="addr"><span>0x1ffb…F8Bc</span><a href="https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
     </div>
   </section>
 
   <section>
-    <p class="eyebrow">Fuera de la cadena</p>
-    <h2>Lo que no necesita ser trustless</h2>
-    <p class="dek">Ubicación, códigos de 6 dígitos y perfiles de Telegram son metadata de UX — viven en Redis, no en un contrato, a propósito.</p>
+    <p class="eyebrow" data-i18n="off.eyebrow">Off-chain</p>
+    <h2 data-i18n="off.title">What doesn't need to be trustless</h2>
+    <p class="dek" data-i18n="off.dek">Location, 6-digit codes and Telegram profiles are UX metadata — they live in Redis, not in a contract, on purpose.</p>
     <div class="stripe-list">
-      <div class="stripe"><div class="k">Login</div><div class="v">Privy (celular/correo/passkey) — crea una wallet embebida invisible en el primer login, nunca "conecta tu wallet".</div></div>
-      <div class="stripe"><div class="k">Oráculo de IA</div><div class="v">Claude Opus lee el historial on-chain y propone score/límite en español simple — acotado por el circuit breaker de <code>FiadoScoring</code>.</div></div>
-      <div class="stripe"><div class="k">Bot de Telegram</div><div class="v">Webhook en producción (no polling — Vercel no corre daemons), avisa pagos y responde <code>/perfil</code>, siempre en soles.</div></div>
-      <div class="stripe"><div class="k">Mapa de bodegas</div><div class="v">MapLibre + tiles de CARTO — cada bodega guarda su ubicación, el cliente paga directo desde el pin.</div></div>
-      <div class="stripe"><div class="k">Storage</div><div class="v">Upstash Redis en producción, con fallback automático a archivo local en desarrollo.</div></div>
-      <div class="stripe"><div class="k">Tasa de cambio</div><div class="v">ETH → PEN de solo lectura y cacheada — puramente de display, nadie ve "ETH" en la app.</div></div>
+      <div class="stripe"><div class="k">Login</div><div class="v" data-i18n="off.login">Privy (phone/email/passkey) — creates an invisible embedded wallet on first login, never "connect your wallet".</div></div>
+      <div class="stripe"><div class="k" data-i18n="off.ai.k">AI oracle</div><div class="v" data-i18n="off.ai">Claude reads the on-chain history and proposes a score/limit explained in plain Spanish — bounded by <code>FiadoScoring</code>'s circuit breaker.</div></div>
+      <div class="stripe"><div class="k" data-i18n="off.tg.k">Telegram bot</div><div class="v" data-i18n="off.tg">Webhook in production (no polling — Vercel doesn't run daemons); sends payment alerts and answers <code>/perfil</code>, always in soles.</div></div>
+      <div class="stripe"><div class="k" data-i18n="off.map.k">Bodega map</div><div class="v" data-i18n="off.map">MapLibre + CARTO tiles — each bodega saves its location and customers pay straight from the pin.</div></div>
+      <div class="stripe"><div class="k">Storage</div><div class="v" data-i18n="off.storage">Upstash Redis in production, with an automatic local-file fallback in development.</div></div>
+      <div class="stripe"><div class="k" data-i18n="off.fx.k">Exchange rate</div><div class="v" data-i18n="off.fx">USD → PEN, read-only and cached — users type and see soles; the app signs the USDG equivalent. Nobody sees "USDG" or "ETH".</div></div>
     </div>
   </section>
 
   <section>
-    <p class="eyebrow">Modelo de negocio</p>
-    <h2>Cobrar sigue siendo gratis para la bodega</h2>
-    <p class="dek">
-      Ningún ingreso sale del bolsillo del bodeguero por su venta diaria — los cuatro mecanismos
-      le cobran a quien recibe un valor nuevo real, y ninguno está activado todavía: primero
-      infraestructura y confianza, después monetización.
+    <p class="eyebrow" data-i18n="biz.eyebrow">Business model</p>
+    <h2 data-i18n="biz.title">Getting paid stays free for the bodega</h2>
+    <p class="dek" data-i18n="biz.dek">
+      No revenue comes out of the shopkeeper's pocket for their daily sales — all four mechanisms
+      charge whoever receives real new value, and none is switched on yet: infrastructure and trust
+      first, monetization second.
     </p>
     <div class="biz-grid">
       <div class="biz-card">
-        <div class="who">Bancos / microfinancieras</div>
-        <p>Pagan por consultar el certificado de crédito — mismo modelo que un buró de crédito tradicional.</p>
+        <div class="who" data-i18n="biz.1.who">Banks / microlenders</div>
+        <p data-i18n="biz.1">Pay to query the credit certificate — the same model as a traditional credit bureau.</p>
       </div>
       <div class="biz-card">
-        <div class="who">Bodegas, opcional</div>
-        <p>Spread pequeño sobre el interés de <code>CreditLine</code>, solo si eligen pedir prestado.</p>
+        <div class="who" data-i18n="biz.2.who">Bodegas, optional</div>
+        <p data-i18n="biz.2">A small spread on <code>CreditLine</code> interest, only if they choose to borrow.</p>
       </div>
       <div class="biz-card">
-        <div class="who">Distribuidores</div>
-        <p>Comisión de intermediación sobre la demanda ya agregada en <code>GroupOrders</code>.</p>
+        <div class="who" data-i18n="biz.3.who">Distributors</div>
+        <p data-i18n="biz.3">A brokerage fee on the demand already aggregated in <code>GroupOrders</code>.</p>
       </div>
       <div class="biz-card">
-        <div class="who">Programas sociales</div>
-        <p>Cuota de administración sobre <code>BeneficioToken</code>, muy por debajo de la filtración actual.</p>
+        <div class="who" data-i18n="biz.4.who">Social programs</div>
+        <p data-i18n="biz.4">An administration fee on <code>BeneficioToken</code>, far below today's leakage.</p>
       </div>
     </div>
-    <p class="biz-note">
-      El mecanismo 1 (consulta de certificado) es el primero en poder activarse — no depende de
-      liquidez profunda ni de un acuerdo externo, solo de bodegas con certificados reales. Mientras
-      tanto, el gas patrocinado y el futuro on/off-ramp son costo operativo, no ingreso.
+    <p class="biz-note" data-i18n="biz.note">
+      Mechanism 1 (certificate queries) is the first one that can be switched on — it doesn't depend
+      on deep liquidity or an external agreement, only on bodegas with real certificates. Until then,
+      sponsored gas and the future on/off-ramp are operating costs, not revenue.
     </p>
   </section>
 
   <section>
     <p class="eyebrow">Roadmap</p>
-    <h2>Lo que sigue</h2>
+    <h2 data-i18n="rm.title">What's next</h2>
     <div class="roadmap">
       <div class="rm-item">
-        <div class="rm-status">Próximas semanas</div>
-        <p><strong>Notificaciones por WhatsApp</strong>, junto a Telegram — stub ya construido, con los TODOs concretos que faltan.</p>
+        <div class="rm-status" data-i18n="rm.1.when">Coming weeks</div>
+        <p data-i18n="rm.1"><strong>WhatsApp notifications</strong>, alongside Telegram — stub already built, with the concrete TODOs that remain.</p>
       </div>
       <div class="rm-item">
-        <div class="rm-status">En planes</div>
-        <p><strong>eSol real</strong> — integrar un proveedor de conversión soles↔saldo on-chain ya autorizado en Perú, no emitir un token propio. No le agrega costo al cashback: el margen de la conversión se absorbe como costo de plataforma, igual que ya se hace con el gas.</p>
+        <div class="rm-status" data-i18n="rm.2.when">Planned</div>
+        <p data-i18n="rm.2"><strong>Real soles in and out</strong> — integrate a soles↔USDG conversion provider already licensed in Peru, instead of issuing our own token. It adds no cost to cashback: the conversion margin is absorbed as a platform cost, just like gas already is.</p>
       </div>
     </div>
   </section>
 
   <footer>
-    <span>Bodegueando · Arbitrum Sepolia · hecho para bodegas de barrio del Perú</span>
+    <span data-i18n="footer">Bodegueando · Arbitrum Sepolia · built for Peru's neighborhood bodegas</span>
     <span>
       <a href="https://github.com/Gabrululu/Bodegueando" target="_blank" rel="noopener">github.com/Gabrululu/Bodegueando</a>
     </span>
   </footer>
 
 </div>
+
+<script>
+(() => {
+  // English is the markup itself; Spanish lives here. Each key matches a data-i18n attribute.
+  const ES = {
+    "nav.repo": "Repositorio",
+    "nav.arch": "Arquitectura completa",
+    "hero.eyebrow": "Arquitectura",
+    "hero.title": 'Cobrar, ganar puntos y fiar,<br /><span class="accentitalic">con Arbitrum por dentro.</span>',
+    "hero.lede": "Bodegueando digitaliza la bodega de barrio sin pedirle que cambie cómo cobra. Por encima de cada venta en soles, una capa on-chain en Arbitrum liquida el pago en USDG, acuña cashback y construye el historial que hoy no existe para este segmento — todo desplegado, verificado y probado con transacciones reales en Arbitrum Sepolia, no en un entorno simulado.",
+    "hero.m1": "contratos desplegados",
+    "hero.m2": "tests (Rust + Solidity + circuito)",
+    "hero.m3": "stablecoin de liquidación (Paxos)",
+    "hero.m4": "comisión por cobrar",
+    "mech.eyebrow": "Mecanismo",
+    "mech.title": "De un pago con el celular a un cashback on-chain",
+    "mech.dek": 'El bodeguero y el cliente nunca ven "gas", "wallet" ni una dirección — por dentro, cada pago es una <code>UserOperation</code> patrocinada (ERC-4337) que un contrato routea en USDG, acuña puntos, registra el historial de fiado y avisa por Telegram, en una sola firma.',
+    "mech.aria": "Diagrama: un pago va del celular del cliente, por login sin wallet y una UserOperation patrocinada por el paymaster, hasta PaymentRouter en Arbitrum, que liquida en USDG, acuña cashback en PuntosToken, registra el historial en FiadoScoring y avisa por Telegram; FiadoScoring además intercambia datos con un oráculo de IA que solo puede subir el límite hasta el doble del heurístico.",
+    "mech.caption": "Un pago sale del celular del cliente sin que vea gas ni wallet, patrocinado por <code>PuntosPaymaster</code>, y termina repartido en tres efectos on-chain — cashback, historial de fiado, aviso por Telegram — más un circuit breaker que limita cuánto puede ajustar la IA el límite de fiado sin historial real detrás.",
+    "dg.a1": "Cliente /",
+    "dg.a2": "Bodeguero",
+    "dg.a3": "celular, sin wallet",
+    "dg.b1": "wallet embebida,",
+    "dg.b2": "firma la wallet de Privy",
+    "dg.c1": "gas patrocinado —",
+    "dg.c2": "bodega: siempre gratis",
+    "dg.c3": "comprador: 5 tx gratis, después PUNTOS",
+    "dg.d1": "Arbitrum · liquida en USDG",
+    "dg.e1": "ERC-20, cashback 2%",
+    "dg.f0": "registra pago",
+    "dg.f1": "y fiado por cliente",
+    "dg.g0": "avisa el pago",
+    "dg.g1": "Bot de Telegram",
+    "dg.g2": "webhook, en soles",
+    "dg.h0": "historial →",
+    "dg.h1": "← ajuste ≤ 2×",
+    "dg.h2": "Oráculo de IA",
+    "dg.h3": "Claude · acotado on-chain",
+    "chain.eyebrow": "On-chain — Arbitrum Sepolia",
+    "chain.title": "Once contratos, cada uno con un trabajo puntual",
+    "chain.dek": "Todos verificados — Solidity con código fuente legible en Arbiscan, <code>FiadoScoring</code> con un build reproducible vía <code>cargo stylus verify</code>. Todo lo que mueve dinero se liquida en USDG de Paxos.",
+    "c.view": "ver ↗",
+    "c.router": "Recibe cada pago en USDG directo a la bodega, acuña cashback, registra el historial y da de alta bodegas self-service.",
+    "c.fiado": "Score y límite de fiado heurístico en Rust/WASM — el único contrato que no es Solidity, por el costo del cómputo repetido en cada pago.",
+    "c.puntos": "ERC-20 de cashback (1 PUNTO = 1 USD de cashback), libre y transferible — se gana pagando, se gasta en gas o en el catálogo de beneficios.",
+    "c.paymaster": "Paymaster ERC-4337: patrocina siempre a las bodegas y las primeras 5 transacciones de cada comprador; después cobra el gas en PUNTOS.",
+    "c.escrow": "Fiado con garantía parcial — vía adicional para montos donde la bodega prefiere pedir un depósito.",
+    "c.rewards": "Catálogo de beneficios por bodega, pagado en PUNTOS y canjeable en cualquier bodega de la red.",
+    "c.group": "Compras conjuntas entre bodegas cercanas para alcanzar el pedido mínimo de un distribuidor.",
+    "c.cert": "Certificado de crédito con Zero-Knowledge (Circom/Groth16) — \"score ≥ 700\" sin revelar la cifra.",
+    "c.verifier": "Verificador ZK autogenerado por <code>snarkjs</code> — sin una línea editada a mano.",
+    "c.credit": "Línea de crédito on-chain que consume el certificado ZK — menos garantía cuanto mejor el score probado.",
+    "c.benefit": "PoC de programas sociales: token restringido, solo gastable en una bodega registrada, nunca revendible.",
+    "off.eyebrow": "Fuera de la cadena",
+    "off.title": "Lo que no necesita ser trustless",
+    "off.dek": "Ubicación, códigos de 6 dígitos y perfiles de Telegram son metadata de UX — viven en Redis, no en un contrato, a propósito.",
+    "off.login": "Privy (celular/correo/passkey) — crea una wallet embebida invisible en el primer login, nunca \"conecta tu wallet\".",
+    "off.ai.k": "Oráculo de IA",
+    "off.ai": "Claude lee el historial on-chain y propone score/límite en español simple — acotado por el circuit breaker de <code>FiadoScoring</code>.",
+    "off.tg.k": "Bot de Telegram",
+    "off.tg": "Webhook en producción (no polling — Vercel no corre daemons), avisa pagos y responde <code>/perfil</code>, siempre en soles.",
+    "off.map.k": "Mapa de bodegas",
+    "off.map": "MapLibre + tiles de CARTO — cada bodega guarda su ubicación, el cliente paga directo desde el pin.",
+    "off.storage": "Upstash Redis en producción, con fallback automático a archivo local en desarrollo.",
+    "off.fx.k": "Tasa de cambio",
+    "off.fx": "USD → PEN de solo lectura y cacheada — el usuario escribe y ve soles; la app firma el equivalente en USDG. Nadie ve \"USDG\" ni \"ETH\".",
+    "biz.eyebrow": "Modelo de negocio",
+    "biz.title": "Cobrar sigue siendo gratis para la bodega",
+    "biz.dek": "Ningún ingreso sale del bolsillo del bodeguero por su venta diaria — los cuatro mecanismos le cobran a quien recibe un valor nuevo real, y ninguno está activado todavía: primero infraestructura y confianza, después monetización.",
+    "biz.1.who": "Bancos / microfinancieras",
+    "biz.1": "Pagan por consultar el certificado de crédito — mismo modelo que un buró de crédito tradicional.",
+    "biz.2.who": "Bodegas, opcional",
+    "biz.2": "Spread pequeño sobre el interés de <code>CreditLine</code>, solo si eligen pedir prestado.",
+    "biz.3.who": "Distribuidores",
+    "biz.3": "Comisión de intermediación sobre la demanda ya agregada en <code>GroupOrders</code>.",
+    "biz.4.who": "Programas sociales",
+    "biz.4": "Cuota de administración sobre <code>BeneficioToken</code>, muy por debajo de la filtración actual.",
+    "biz.note": "El mecanismo 1 (consulta de certificado) es el primero en poder activarse — no depende de liquidez profunda ni de un acuerdo externo, solo de bodegas con certificados reales. Mientras tanto, el gas patrocinado y el futuro on/off-ramp son costo operativo, no ingreso.",
+    "rm.title": "Lo que sigue",
+    "rm.1.when": "Próximas semanas",
+    "rm.1": "<strong>Notificaciones por WhatsApp</strong>, junto a Telegram — stub ya construido, con los TODOs concretos que faltan.",
+    "rm.2.when": "En planes",
+    "rm.2": "<strong>Soles reales que entran y salen</strong> — integrar un proveedor de conversión soles↔USDG ya autorizado en Perú, no emitir un token propio. No le agrega costo al cashback: el margen de la conversión se absorbe como costo de plataforma, igual que ya se hace con el gas.",
+    "footer": "Bodegueando · Arbitrum Sepolia · hecho para bodegas de barrio del Perú",
+  };
+  const META = {
+    en: { title: "Bodegueando Architecture", description: document.querySelector('meta[name="description"]').content },
+    es: { title: "Bodegueando — Arquitectura", description: "Resumen visual de una página de la arquitectura on-chain de Bodegueando en Arbitrum: diagrama del flujo de pago, contratos desplegados, modelo de negocio y roadmap." },
+  };
+
+  const textNodes = [...document.querySelectorAll("[data-i18n]")];
+  const ariaNodes = [...document.querySelectorAll("[data-i18n-aria]")];
+  const EN = {};
+  textNodes.forEach((el) => { EN[el.dataset.i18n] = el.innerHTML; });
+  ariaNodes.forEach((el) => { EN[el.dataset.i18nAria] = el.getAttribute("aria-label"); });
+  const buttons = [...document.querySelectorAll(".lang-toggle button")];
+
+  function apply(lang) {
+    const dict = lang === "es" ? ES : EN;
+    textNodes.forEach((el) => {
+      const value = dict[el.dataset.i18n] ?? EN[el.dataset.i18n];
+      if (el.namespaceURI === "http://www.w3.org/2000/svg") el.textContent = value;
+      else el.innerHTML = value;
+    });
+    ariaNodes.forEach((el) => el.setAttribute("aria-label", dict[el.dataset.i18nAria] ?? EN[el.dataset.i18nAria]));
+    document.documentElement.lang = lang;
+    document.title = META[lang].title;
+    document.querySelector('meta[name="description"]').content = META[lang].description;
+    buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lang === lang)));
+  }
+
+  function save(lang) {
+    try { localStorage.setItem("bodegueando-docs-lang", lang); } catch {}
+  }
+
+  function initialLang() {
+    const fromUrl = new URLSearchParams(location.search).get("lang");
+    if (fromUrl === "en" || fromUrl === "es") return fromUrl;
+    try {
+      const stored = localStorage.getItem("bodegueando-docs-lang");
+      if (stored === "en" || stored === "es") return stored;
+    } catch {}
+    return (navigator.language || "").toLowerCase().startsWith("es") ? "es" : "en";
+  }
+
+  buttons.forEach((b) => b.addEventListener("click", () => { apply(b.dataset.lang); save(b.dataset.lang); }));
+  apply(initialLang());
+})();
+</script>
 </body>
 </html>

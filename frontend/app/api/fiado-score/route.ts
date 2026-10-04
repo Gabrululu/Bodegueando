@@ -33,7 +33,7 @@ const recommendationSchema = {
     },
     creditLimitWei: {
       type: "string",
-      description: "Recommended fiado credit limit in wei, as a base-10 string (fits uint256).",
+      description: "Recommended fiado credit limit in USD with 18 decimals (1 USD = 10^18), as a base-10 string (fits uint256).",
     },
     riskLevel: {
       type: "string",
@@ -110,7 +110,9 @@ export async function POST(request: NextRequest) {
       "You are a credit-risk analyst for Bodegueando, a platform giving Lima corner stores " +
       "(bodegas) short-term 'fiado' (store credit) to their customers. You analyze a bodega's " +
       "on-chain payment history — amounts and timestamps of past payments received through the " +
-      "platform — and recommend a credit score and a fiado credit limit in wei. Favor consistent, " +
+      "platform — and recommend a credit score and a fiado credit limit. All amounts (payments and " +
+      "limits) are US dollars with 18 decimals, i.e. 10^18 = 1 USD (payments settle in the USDG " +
+      "stablecoin). Favor consistent, " +
       "frequent, recent payment activity; penalize sparse or old activity. Be conservative with " +
       "credit limits when history is short. IMPORTANT: the `rationale` field is shown directly " +
       "to end users who are not technical and may not be fluent in English — it must always be " +

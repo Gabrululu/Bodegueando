@@ -12,8 +12,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /// that decides who gets unconditionally sponsored gas), then deposits an initial ETH stake
 /// so it can start sponsoring UserOperations right away.
 ///
+/// PUNTOS_PER_ETH is the ETH/USD price with 18 decimals that gas is converted to PUNTOS at
+/// (PUNTOS are USD-denominated since PaymentRouter settles in USDG); keep it current with
+/// `cast send <paymaster> "setPuntosPerEth(uint256)" <rate>`.
+///
 /// Usage:
-///   PUNTOS_TOKEN_ADDRESS=... PAYMENT_ROUTER_ADDRESS=... DEPOSIT_ETH=0.02 \
+///   PUNTOS_TOKEN_ADDRESS=... PAYMENT_ROUTER_ADDRESS=... DEPOSIT_ETH=0.02 PUNTOS_PER_ETH=2500000000000000000000 \
 ///   forge script script/DeployPuntosPaymaster.s.sol:DeployPuntosPaymaster \
 ///     --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
 contract DeployPuntosPaymaster is Script {
@@ -25,11 +29,16 @@ contract DeployPuntosPaymaster is Script {
         address puntosTokenAddress = vm.envAddress("PUNTOS_TOKEN_ADDRESS");
         address paymentRouterAddress = vm.envAddress("PAYMENT_ROUTER_ADDRESS");
         uint256 depositEth = vm.envOr("DEPOSIT_ETH", uint256(0.02 ether));
+        uint256 puntosPerEth = vm.envOr("PUNTOS_PER_ETH", uint256(2500 ether));
 
         vm.startBroadcast(deployerKey);
 
         PuntosPaymaster paymaster = new PuntosPaymaster(
-            IEntryPoint(ENTRY_POINT_V07), IERC20(puntosTokenAddress), IBodegaRegistry(paymentRouterAddress), deployer
+            IEntryPoint(ENTRY_POINT_V07),
+            IERC20(puntosTokenAddress),
+            IBodegaRegistry(paymentRouterAddress),
+            deployer,
+            puntosPerEth
         );
         paymaster.deposit{value: depositEth}();
 

@@ -19,10 +19,13 @@ import {
   puntosTokenAddress,
   creditLineAbi,
   creditLineAddress,
+  stablecoinAbi,
+  stablecoinAddress,
 } from "@/lib/contracts";
 import { confianzaLabel } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
 import { sendAndWait, useSmartAccountClient } from "@/lib/smartAccount";
+import { formatPuntos, withStablecoinApproval } from "@/lib/stablecoin";
 
 const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME;
 
@@ -64,7 +67,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   const [payError, setPayError] = useState<string | null>(null);
   const [isPayConfirmed, setIsPayConfirmed] = useState(false);
 
-  const { formatSoles, solesToEth, ethPen } = useExchangeRate();
+  const { formatSolesFromUsd, usdPen, formatStablecoin, solesToStablecoin } = useExchangeRate();
   const [myCode, setMyCode] = useState<string | null>(null);
   const [repayAmountSoles, setRepayAmountSoles] = useState("");
   const [isRepaySubmitting, setIsRepaySubmitting] = useState(false);
@@ -217,9 +220,19 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
 
   useEffect(() => {
     if (debtWei > BigInt(0) && repayAmountSoles === "") {
-      setRepayAmountSoles(((Number(debtWei) / 1e18) * ethPen).toFixed(2));
+      // La deuda de fiado está en USD con 18 decimales (ver PaymentRouter.sol).
+      setRepayAmountSoles(((Number(debtWei) / 1e18) * usdPen).toFixed(2));
     }
-  }, [debtWei, ethPen, repayAmountSoles]);
+  }, [debtWei, usdPen, repayAmountSoles]);
+
+  const stablecoinBalanceQuery = useReadContract({
+    address: stablecoinAddress,
+    abi: stablecoinAbi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    query: { enabled: Boolean(address) },
+  });
+  const stablecoinBalance = stablecoinBalanceQuery.data ?? BigInt(0);
 
   const benefitBalanceQuery = useReadContract({
     address: beneficioTokenAddress,
@@ -320,10 +333,14 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     setAcceptingInvoiceId(id);
     setInvoiceActionError(null);
     try {
-      await sendAndWait(smartAccountClient, address, [
-        { address: invoiceEscrowAddress, abi: invoiceEscrowAbi, functionName: "acceptInvoice", args: [BigInt(id)], value: collateral },
-      ]);
+      const accept = { address: invoiceEscrowAddress, abi: invoiceEscrowAbi, functionName: "acceptInvoice", args: [BigInt(id)] };
+      await sendAndWait(
+        smartAccountClient,
+        address,
+        collateral > BigInt(0) ? withStablecoinApproval(invoiceEscrowAddress, collateral, accept) : [accept],
+      );
       invoicesQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setInvoiceActionError("No se pudo aceptar la factura. Revisa que tengas saldo para la garantía.");
     } finally {
@@ -336,12 +353,20 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     setRepayingInvoiceId(id);
     setInvoiceActionError(null);
     try {
-      const amountWei = parseEther(solesToEth(Number(invoiceRepaySoles[id] || "0")).toFixed(18));
-      await sendAndWait(smartAccountClient, address, [
-        { address: invoiceEscrowAddress, abi: invoiceEscrowAbi, functionName: "repayInvoice", args: [BigInt(id)], value: amountWei },
-      ]);
+      const amount = solesToStablecoin(invoiceRepaySoles[id] ?? "");
+      await sendAndWait(
+        smartAccountClient,
+        address,
+        withStablecoinApproval(invoiceEscrowAddress, amount, {
+          address: invoiceEscrowAddress,
+          abi: invoiceEscrowAbi,
+          functionName: "repayInvoice",
+          args: [BigInt(id), amount],
+        }),
+      );
       setInvoiceRepaySoles((prev) => ({ ...prev, [id]: "" }));
       invoicesQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setInvoiceActionError("No se pudo pagar esta factura. Intenta de nuevo.");
     } finally {
@@ -492,7 +517,19 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     functionName: "poolBalance",
     query: { enabled: Boolean(creditLineAddress) },
   });
-  const poolBalanceWei = (poolBalanceQuery.data as bigint | undefined) ?? BigInt(0);
+  const poolBalance = (poolBalanceQuery.data as bigint | undefined) ?? BigInt(0);
+
+  // Lo que valen hoy las shares del usuario: su parte de totalAssets (líquido + lo prestado).
+  const poolTotalsQuery = useReadContracts({
+    contracts: [
+      { address: creditLineAddress, abi: creditLineAbi, functionName: "totalAssets" },
+      { address: creditLineAddress, abi: creditLineAbi, functionName: "totalShares" },
+    ],
+    query: { enabled: Boolean(creditLineAddress) },
+  });
+  const poolTotalAssets = (poolTotalsQuery.data?.[0]?.result as bigint | undefined) ?? BigInt(0);
+  const poolTotalShares = (poolTotalsQuery.data?.[1]?.result as bigint | undefined) ?? BigInt(0);
+  const myLenderValue = poolTotalShares > BigInt(0) ? (myLenderShares * poolTotalAssets) / poolTotalShares : BigInt(0);
 
   const overdueLoanCountQuery = useReadContract({
     address: creditLineAddress,
@@ -526,12 +563,21 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     setIsDepositing(true);
     setDepositError(null);
     try {
-      const amountWei = parseEther(solesToEth(Number(lenderDepositSoles || "0")).toFixed(18));
-      await sendAndWait(smartAccountClient, address, [
-        { address: creditLineAddress, abi: creditLineAbi, functionName: "deposit", args: [], value: amountWei },
-      ]);
+      const amount = solesToStablecoin(lenderDepositSoles);
+      await sendAndWait(
+        smartAccountClient,
+        address,
+        withStablecoinApproval(creditLineAddress, amount, {
+          address: creditLineAddress,
+          abi: creditLineAbi,
+          functionName: "deposit",
+          args: [amount],
+        }),
+      );
       lenderSharesQuery.refetch();
       poolBalanceQuery.refetch();
+      poolTotalsQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setDepositError("No se pudo depositar. Intenta de nuevo.");
     } finally {
@@ -549,8 +595,12 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       ]);
       lenderSharesQuery.refetch();
       poolBalanceQuery.refetch();
+      poolTotalsQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
-      setWithdrawLenderError("No se pudo retirar. Intenta de nuevo.");
+      setWithdrawLenderError(
+        "No se pudo retirar. Si hay préstamos activos puede que no haya suficientes fondos disponibles todavía.",
+      );
     } finally {
       setIsWithdrawingLender(false);
     }
@@ -579,19 +629,12 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     setRepayError(null);
     setIsRepayConfirmed(false);
     try {
-      const ethAmount = solesToEth(Number(repayAmountSoles || "0"));
-      await sendAndWait(smartAccountClient, address, [
-        {
-          address: paymentRouterAddress,
-          abi: paymentRouterAbi,
-          functionName: "payFiado",
-          args: [bodegaAddress],
-          value: parseEther(ethAmount.toFixed(18)),
-        },
-      ]);
+      const amount = solesToStablecoin(repayAmountSoles);
+      await sendAndWait(smartAccountClient, address, stablecoinPaymentCalls("payFiado", bodegaAddress, amount));
       setIsRepayConfirmed(true);
       setRepayAmountSoles("");
       debtQuery.refetch();
+      stablecoinBalanceQuery.refetch();
     } catch {
       setRepayError("No se pudo completar el pago del fiado. Intenta de nuevo.");
     } finally {
@@ -620,8 +663,11 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     })
       .then((res) => res.json())
       .then((data) => {
-        if (data.funded) {
-          setFaucetMessage(`🎁 Te regalamos ${formatSoles(Number(data.amountEth))} de saldo de prueba para que puedas probar la app.`);
+        if (data.funded && Number(data.amountUsd) > 0) {
+          stablecoinBalanceQuery.refetch();
+          setFaucetMessage(
+            `🎁 Te regalamos ${formatSolesFromUsd(Number(data.amountUsd ?? 0))} de saldo de prueba para que puedas probar la app.`,
+          );
         } else if (data.reason === "faucet_error") {
           console.error("[faucet] no se pudo fondear la cuenta", address);
         }
@@ -630,24 +676,34 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address]);
 
+  /**
+   * PaymentRouter jala el USDG directo del comprador a la bodega, así que el approve va en el
+   * mismo UserOperation que el pago (ver lib/stablecoin.ts).
+   */
+  function stablecoinPaymentCalls(functionName: "receivePayment" | "payFiado", bodega: Address, amount: bigint) {
+    return withStablecoinApproval(paymentRouterAddress as Address, amount, {
+      address: paymentRouterAddress as Address,
+      abi: paymentRouterAbi,
+      functionName,
+      args: [bodega, amount],
+    });
+  }
+
   async function handlePay() {
     if (!bodegaAddress || !paymentRouterAddress || !smartAccountClient || !address) return;
     setIsPaySubmitting(true);
     setPayError(null);
     setIsPayConfirmed(false);
     try {
-      const ethAmount = solesToEth(Number(amountSoles || "0"));
-      await sendAndWait(smartAccountClient, address, [
-        {
-          address: paymentRouterAddress,
-          abi: paymentRouterAbi,
-          functionName: "receivePayment",
-          args: [bodegaAddress],
-          value: parseEther(ethAmount.toFixed(18)),
-        },
-      ]);
+      const amount = solesToStablecoin(amountSoles);
+      if (amount > stablecoinBalance) {
+        setPayError("No tienes saldo suficiente para este pago.");
+        return;
+      }
+      await sendAndWait(smartAccountClient, address, stablecoinPaymentCalls("receivePayment", bodegaAddress, amount));
 
       setIsPayConfirmed(true);
+      stablecoinBalanceQuery.refetch();
       fiadoEnabledQuery.refetch();
       scoreQuery.refetch();
       limitQuery.refetch();
@@ -726,7 +782,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   }
 
   const score = Number((scoreQuery.data as bigint | undefined) ?? BigInt(0));
-  const limitEth = Number((limitQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18;
+  const limitUsd = Number((limitQuery.data as bigint | undefined) ?? BigInt(0)) / 1e18;
   const aiAdjusted = Boolean((aiInfoQuery.data as [boolean, bigint] | undefined)?.[0]);
   const confianza = confianzaLabel(score);
 
@@ -796,7 +852,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
           <div>
             <p className="text-xs text-[#6b6d64]">Fiado disponible en esta bodega</p>
             <p className="text-2xl font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
-              {limitQuery.isLoading ? "…" : formatSoles(limitEth)}
+              {limitQuery.isLoading ? "…" : formatSolesFromUsd(limitUsd)}
             </p>
           </div>
           <div className="flex items-center gap-2 text-sm">
@@ -812,7 +868,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
           {debtWei > BigInt(0) && (
             <div className="mt-1 flex flex-col gap-2 border-t border-black/10 pt-3">
               <p className="text-xs text-[#6b6d64]">
-                Le debes a esta bodega: <span className="font-medium text-[#0a0a0b]">{formatSoles(Number(debtWei) / 1e18)}</span>
+                Le debes a esta bodega: <span className="font-medium text-[#0a0a0b]">{formatSolesFromUsd(Number(debtWei) / 1e18)}</span>
               </p>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-[#6b6d64]">S/</span>
@@ -893,8 +949,8 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
           {myInvoices.map((inv) => (
             <div key={inv.id} className={highlightBoxClass}>
               <p className="text-xs text-[#6b6d64]">
-                Monto: <span className="font-medium text-[#0a0a0b]">{formatSoles(Number(inv.principal) / 1e18)}</span> · Garantía:{" "}
-                {formatSoles(Number(inv.collateral) / 1e18)}
+                Monto: <span className="font-medium text-[#0a0a0b]">{formatStablecoin(inv.principal)}</span> · Garantía:{" "}
+                {formatStablecoin(inv.collateral)}
               </p>
               <p className="text-xs text-[#6b6d64]">Vence el {new Date(Number(inv.dueDate) * 1000).toLocaleDateString("es-PE")}</p>
 
@@ -904,14 +960,14 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
                   disabled={acceptingInvoiceId === inv.id}
                   className={outlineButtonClass}
                 >
-                  {acceptingInvoiceId === inv.id ? "Aceptando..." : `Aceptar y depositar ${formatSoles(Number(inv.collateral) / 1e18)}`}
+                  {acceptingInvoiceId === inv.id ? "Aceptando..." : `Aceptar y depositar ${formatStablecoin(inv.collateral)}`}
                 </button>
               )}
 
               {inv.status === 1 && (
                 <div className="mt-1 flex flex-col gap-2 border-t border-black/10 pt-3">
                   <p className="text-xs text-[#6b6d64]">
-                    Ya pagaste: {formatSoles(Number(inv.repaidAmount) / 1e18)} de {formatSoles(Number(inv.principal) / 1e18)}
+                    Ya pagaste: {formatStablecoin(inv.repaidAmount)} de {formatStablecoin(inv.principal)}
                   </p>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-[#6b6d64]">S/</span>
@@ -969,7 +1025,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
             <div key={r.id} className={highlightBoxClass}>
               <p className="text-sm font-medium text-[#0a0a0b]">{r.title}</p>
               <p className="text-xs text-[#6b6d64]">
-                {(Number(r.pointCost) / 1e18).toFixed(0)} PUNTOS · bodega #{bodegaCodesByAddress[r.bodega.toLowerCase()] ?? "…"}
+                {formatPuntos(r.pointCost)} PUNTOS (vale {formatSolesFromUsd(Number(r.pointCost) / 1e18)}) · bodega #{bodegaCodesByAddress[r.bodega.toLowerCase()] ?? "…"}
               </p>
               <button
                 onClick={() => (r.kind === 0 ? handleRedeemInstant(r.id, r.pointCost) : handleEnterRaffle(r.id, r.pointCost))}
@@ -991,7 +1047,13 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
             Cualquier cuenta puede prestar acá — las bodegas con certificado de crédito
             piden prestado con menos garantía, y lo que pagan (con interés) vuelve al fondo.
           </p>
-          <p className="text-xs text-[#6b6d64]">Fondos disponibles: {formatSoles(Number(poolBalanceWei) / 1e18)}</p>
+          <p className="text-xs text-[#6b6d64]">Fondos disponibles: {formatStablecoin(poolBalance, { withUsd: true })}</p>
+          {myLenderShares > BigInt(0) && (
+            <p className="text-xs text-[#6b6d64]">
+              Tu depósito vale hoy:{" "}
+              <span className="font-medium text-[#0a0a0b]">{formatStablecoin(myLenderValue, { withUsd: true })}</span>
+            </p>
+          )}
 
           <div className="flex items-center gap-2">
             <span className="text-sm text-[#6b6d64]">S/</span>
@@ -1025,7 +1087,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
               {overdueLoans.map((loan) => (
                 <div key={loan.id} className={highlightBoxClass}>
                   <p className="text-xs text-[#6b6d64]">
-                    {formatSoles(Number(loan.principal) / 1e18)} · garantía {formatSoles(Number(loan.collateral) / 1e18)} · vence{" "}
+                    {formatStablecoin(loan.principal)} · garantía {formatStablecoin(loan.collateral)} · vence{" "}
                     {new Date(Number(loan.dueDate) * 1000).toLocaleDateString("es-PE")}
                   </p>
                   <button
@@ -1064,6 +1126,14 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
                 className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
               />
             </div>
+            {isConnected && (
+              <p className="text-xs text-[#6b6d64]">
+                Tu saldo:{" "}
+                {stablecoinBalanceQuery.isLoading
+                  ? "…"
+                  : formatStablecoin(stablecoinBalance, { withUsd: true })}
+              </p>
+            )}
           </div>
 
           <button

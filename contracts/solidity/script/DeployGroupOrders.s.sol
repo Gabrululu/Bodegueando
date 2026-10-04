@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
+import {StablecoinScript} from "./StablecoinScript.sol";
 import {GroupOrders, IBodegaRegistry} from "../src/GroupOrders.sol";
 
 /// @notice Deploys GroupOrders against the already-deployed PaymentRouter (read-only
 /// IBodegaRegistry, same isBodega mapping every other contract trusts). No wiring needed on
-/// any other contract — GroupOrders only ever reads PaymentRouter and moves its own native
-/// ETH balance, so neither PaymentRouter nor FiadoScoring needs to be told this one exists.
+/// any other contract — GroupOrders only ever reads PaymentRouter and moves its own
+/// stablecoin balance, so neither PaymentRouter nor FiadoScoring needs to be told this one exists.
 ///
 /// Usage:
 ///   PAYMENT_ROUTER_ADDRESS=... \
 ///   forge script script/DeployGroupOrders.s.sol:DeployGroupOrders \
 ///     --rpc-url arbitrum_sepolia --broadcast --verify -vvvv
-contract DeployGroupOrders is Script {
+contract DeployGroupOrders is StablecoinScript {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
@@ -21,7 +22,7 @@ contract DeployGroupOrders is Script {
 
         vm.startBroadcast(deployerKey);
 
-        GroupOrders groupOrders = new GroupOrders(deployer, IBodegaRegistry(paymentRouterAddress));
+        GroupOrders groupOrders = new GroupOrders(deployer, IBodegaRegistry(paymentRouterAddress), _stablecoin());
 
         vm.stopBroadcast();
 

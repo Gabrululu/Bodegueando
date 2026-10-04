@@ -1,4 +1,4 @@
-import type { Abi } from "viem";
+import { erc20Abi, type Abi } from "viem";
 import PaymentRouterArtifact from "./abis/PaymentRouter.json";
 import PuntosTokenArtifact from "./abis/PuntosToken.json";
 import FiadoScoringArtifact from "./abis/FiadoScoring.json";
@@ -39,6 +39,17 @@ export const creditCertificateAddress = process.env
   .NEXT_PUBLIC_CREDIT_CERTIFICATE_ADDRESS as `0x${string}` | undefined;
 export const creditLineAddress = process.env
   .NEXT_PUBLIC_CREDIT_LINE_ADDRESS as `0x${string}` | undefined;
+
+/**
+ * Stablecoin que PaymentRouter usa para cobrar: Paxos USDG (6 decimales, 1 USDG = 1 USD).
+ * Por defecto apunta a USDG en Arbitrum Sepolia (docs.paxos.com/guides/stablecoin/usdg/testnet).
+ * Los montos que PaymentRouter le pasa a PuntosToken y FiadoScoring (cashback, límites y deuda
+ * de fiado) están normalizados a 18 decimales, en USD — ver PaymentRouter.sol.
+ */
+export const stablecoinAddress = (process.env.NEXT_PUBLIC_STABLECOIN_ADDRESS ||
+  "0xFFC95faa3d63Cde504a05B567C600B78C0b41892") as `0x${string}`;
+export const STABLECOIN_DECIMALS = 6;
+export const stablecoinAbi = erc20Abi;
 
 export const paymentRouterAbi = PaymentRouterArtifact.abi;
 export const puntosTokenAbi = PuntosTokenArtifact.abi;

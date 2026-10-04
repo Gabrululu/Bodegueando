@@ -29,6 +29,8 @@ contract PuntosPaymasterTest is Test {
     address account = makeAddr("smartAccount");
     address bodega = makeAddr("bodegaSmartAccount");
 
+    uint256 constant PUNTOS_PER_ETH = 2500 ether; // ETH at $2500
+
     function setUp() public {
         entryPoint = new EntryPoint();
         registry = new MockBodegaRegistry();
@@ -36,7 +38,9 @@ contract PuntosPaymasterTest is Test {
         vm.prank(owner);
         puntos = new PuntosToken(owner);
 
-        paymaster = new PuntosPaymaster(IEntryPoint(address(entryPoint)), puntos, IBodegaRegistry(registry), owner);
+        paymaster = new PuntosPaymaster(
+            IEntryPoint(address(entryPoint)), puntos, IBodegaRegistry(registry), owner, PUNTOS_PER_ETH
+        );
 
         vm.prank(owner);
         puntos.setMinter(owner);
@@ -150,7 +154,7 @@ contract PuntosPaymasterTest is Test {
         }
 
         vm.prank(owner);
-        puntos.mint(account, 1 ether);
+        puntos.mint(account, 10 ether);
         vm.prank(account);
         puntos.approve(address(paymaster), type(uint256).max);
 
@@ -161,8 +165,60 @@ contract PuntosPaymasterTest is Test {
         vm.prank(address(entryPoint));
         paymaster.postOp(IPaymaster.PostOpMode.opSucceeded, context, 0.0003 ether, 1 gwei);
 
-        assertEq(puntos.balanceOf(account), 1 ether - 0.0003 ether);
-        assertEq(puntos.balanceOf(address(paymaster)), 0.0003 ether);
+        // 0.0003 ETH of gas at $2500/ETH = 0.75 USD = 0.75 PUNTOS.
+        assertEq(puntos.balanceOf(account), 10 ether - 0.75 ether);
+        assertEq(puntos.balanceOf(address(paymaster)), 0.75 ether);
+    }
+
+    function test_ValidationRequiresAllowanceForConvertedMaxCost() public {
+        uint256 free = paymaster.FREE_TRANSACTIONS();
+        for (uint256 i = 0; i < free; i++) {
+            _sponsoredRoundTrip(account, 1 ether, 0.001 ether, IPaymaster.PostOpMode.opSucceeded);
+        }
+
+        vm.prank(owner);
+        puntos.mint(account, 10 ether);
+        // maxCost 0.001 ETH -> 2.5 PUNTOS needed; an allowance sized in raw wei isn't enough.
+        vm.prank(account);
+        puntos.approve(address(paymaster), 0.001 ether);
+
+        PackedUserOperation memory userOp = _emptyUserOp(account);
+        vm.prank(address(entryPoint));
+        vm.expectRevert(PuntosPaymaster.InsufficientPuntosAllowance.selector);
+        paymaster.validatePaymasterUserOp(userOp, bytes32(0), 0.001 ether);
+
+        vm.prank(account);
+        puntos.approve(address(paymaster), 2.5 ether);
+        vm.prank(address(entryPoint));
+        paymaster.validatePaymasterUserOp(userOp, bytes32(0), 0.001 ether);
+    }
+
+    function test_GasCostInPuntos_UsesRate() public view {
+        assertEq(paymaster.gasCostInPuntos(1 ether), PUNTOS_PER_ETH);
+        assertEq(paymaster.gasCostInPuntos(0.0001 ether), 0.25 ether);
+    }
+
+    function test_SetPuntosPerEth_OnlyOwnerAndBounded() public {
+        vm.prank(account);
+        vm.expectRevert();
+        paymaster.setPuntosPerEth(3000 ether);
+
+        vm.startPrank(owner);
+        paymaster.setPuntosPerEth(3000 ether);
+        assertEq(paymaster.puntosPerEth(), 3000 ether);
+
+        uint256 minRate = paymaster.MIN_PUNTOS_PER_ETH();
+        uint256 maxRate = paymaster.MAX_PUNTOS_PER_ETH();
+        vm.expectRevert(PuntosPaymaster.PuntosPerEthOutOfBounds.selector);
+        paymaster.setPuntosPerEth(minRate - 1);
+        vm.expectRevert(PuntosPaymaster.PuntosPerEthOutOfBounds.selector);
+        paymaster.setPuntosPerEth(maxRate + 1);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ConstructedWithOutOfBoundsRate() public {
+        vm.expectRevert(PuntosPaymaster.PuntosPerEthOutOfBounds.selector);
+        new PuntosPaymaster(IEntryPoint(address(entryPoint)), puntos, IBodegaRegistry(registry), owner, 1 ether);
     }
 
     function test_FailedFreeTransaction_DoesNotConsumeRunway() public {

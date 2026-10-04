@@ -15,7 +15,8 @@ interface IFiadoScoring {
     /// configured payment_router address.
     function recordPayment(address bodega, uint256 amount, uint256 timestamp) external;
 
-    /// @notice Current heuristic-or-AI-adjusted credit limit for `bodega`, in wei.
+    /// @notice Current heuristic-or-AI-adjusted credit limit for `bodega`, in USD-wei (USD with
+    /// 18 decimals — see StablecoinSettlement).
     function getCreditLimit(address bodega) external view returns (uint256);
 
     /// @notice Current score (0-1000) for `bodega`.
@@ -25,7 +26,7 @@ interface IFiadoScoring {
     /// on-chain heuristic, plus the timestamp of that update.
     function getAiAdjustmentInfo(address bodega) external view returns (bool aiAdjusted, uint256 updatedAt);
 
-    /// @notice The bounded recent-payment ring buffer for `bodega` (amounts in wei, parallel
+    /// @notice The bounded recent-payment ring buffer for `bodega` (amounts in USD-wei, parallel
     /// array of unix timestamps), used as context for the off-chain AI recommendation.
     function getPaymentHistory(address bodega) external view returns (uint256[] memory amounts, uint256[] memory timestamps);
 
@@ -41,7 +42,7 @@ interface IFiadoScoring {
     /// registry check — only a bodega can toggle its own flag.
     function setFiadoEnabled(bool enabled) external;
 
-    /// @notice Bodega (`msg.sender`) extends fiado credit to `customer`, for `amount` wei. No
+    /// @notice Bodega (`msg.sender`) extends fiado credit to `customer`, for `amount` USD-wei. No
     /// money moves — this is the IOU. Reverts if fiado isn't enabled for the caller or if it
     /// would push total outstanding past the caller's own credit limit.
     function extendFiado(address customer, uint256 amount) external;
@@ -55,7 +56,7 @@ interface IFiadoScoring {
 
     /// @notice Records a fiado repayment from `customer` to `bodega`. Restricted on the Stylus
     /// side to the configured payment_router or escrow address — called from
-    /// `PaymentRouter.payFiado` after the real ETH transfer to `bodega` already happened, or
+    /// `PaymentRouter.payFiado` after the real stablecoin transfer to `bodega` already happened, or
     /// from InvoiceEscrow's `repayInvoice`/`claimCollateral` for the collateral-backed path.
     function repayFiado(address bodega, address customer, uint256 amount) external;
 
@@ -63,7 +64,7 @@ interface IFiadoScoring {
     /// `extendFiadoFor` and `repayFiado`.
     function escrow() external view returns (address);
 
-    /// @notice Current outstanding fiado debt that `customer` owes `bodega`, in wei.
+    /// @notice Current outstanding fiado debt that `customer` owes `bodega`, in USD-wei.
     function getFiadoDebt(address bodega, address customer) external view returns (uint256);
 
     /// @notice How much fiado `bodega` still has room to extend right now (credit limit minus

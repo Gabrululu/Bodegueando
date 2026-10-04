@@ -2,7 +2,9 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {CreditLine, IBodegaRegistry, ICreditCertificate} from "../src/CreditLine.sol";
+import {MockUSDG} from "./mocks/MockUSDG.sol";
 
 contract MockBodegaRegistry is IBodegaRegistry {
     mapping(address => bool) public isBodega;
@@ -28,6 +30,7 @@ contract CreditLineTest is Test {
     CreditLine creditLine;
     MockBodegaRegistry registry;
     MockCreditCertificate certificate;
+    MockUSDG usdg;
 
     address owner = makeAddr("owner");
     address lender = makeAddr("lender");
@@ -35,204 +38,291 @@ contract CreditLineTest is Test {
     address bodega = makeAddr("bodega");
     address randomWallet = makeAddr("randomWallet");
 
+    // Stablecoin amounts (USDG, 6 decimals).
+    uint256 constant POOL = 1_000e6;
+    uint256 constant LOAN = 1_000e6;
+
     function setUp() public {
         registry = new MockBodegaRegistry();
         registry.setBodega(bodega, true);
         certificate = new MockCreditCertificate();
-        creditLine = new CreditLine(owner, registry, certificate);
+        usdg = new MockUSDG();
+        creditLine = new CreditLine(owner, registry, certificate, IERC20(address(usdg)));
 
-        vm.deal(lender, 100 ether);
-        vm.deal(lender2, 100 ether);
-        vm.deal(bodega, 100 ether);
+        _fund(lender);
+        _fund(lender2);
+        _fund(bodega);
+        _fund(randomWallet);
+    }
+
+    function _fund(address account) internal {
+        usdg.mint(account, 10_000e6);
+        vm.prank(account);
+        usdg.approve(address(creditLine), type(uint256).max);
+    }
+
+    function _depositAndBorrow(uint256 threshold) internal returns (uint256 loanId) {
+        vm.prank(lender);
+        creditLine.deposit(POOL);
+        certificate.setThreshold(bodega, threshold);
+        vm.prank(bodega);
+        loanId = creditLine.borrow(LOAN);
     }
 
     // --- deposit / withdraw ---
 
     function test_FirstDepositMintsSharesEqualToAmount() public {
         vm.prank(lender);
-        uint256 shares = creditLine.deposit{value: 10 ether}();
-        assertEq(shares, 10 ether);
-        assertEq(creditLine.poolBalance(), 10 ether);
-        assertEq(creditLine.lenderShares(lender), 10 ether);
+        uint256 shares = creditLine.deposit(POOL);
+        assertEq(shares, POOL);
+        assertEq(creditLine.poolBalance(), POOL);
+        assertEq(creditLine.lenderShares(lender), POOL);
+        assertEq(usdg.balanceOf(address(creditLine)), POOL);
     }
 
     function test_WithdrawReturnsProportionalAmount() public {
         vm.prank(lender);
-        uint256 shares = creditLine.deposit{value: 10 ether}();
+        uint256 shares = creditLine.deposit(POOL);
 
-        uint256 balanceBefore = lender.balance;
+        uint256 balanceBefore = usdg.balanceOf(lender);
         vm.prank(lender);
         creditLine.withdraw(shares);
-        assertEq(lender.balance, balanceBefore + 10 ether);
+        assertEq(usdg.balanceOf(lender), balanceBefore + POOL);
         assertEq(creditLine.poolBalance(), 0);
     }
 
     function test_RevertWhen_WithdrawingMoreSharesThanOwned() public {
         vm.prank(lender);
-        creditLine.deposit{value: 1 ether}();
+        creditLine.deposit(1e6);
 
         vm.prank(lender2);
         vm.expectRevert(CreditLine.InsufficientShares.selector);
-        creditLine.withdraw(1 ether);
+        creditLine.withdraw(1e6);
+    }
+
+    function test_DonationDoesNotChangeSharePrice() public {
+        vm.prank(lender);
+        creditLine.deposit(1e6);
+        // Tokens sent directly, bypassing deposit(), are ignored by the internal accounting.
+        vm.prank(randomWallet);
+        usdg.transfer(address(creditLine), 5_000e6);
+
+        vm.prank(lender2);
+        uint256 shares = creditLine.deposit(1e6);
+        assertEq(shares, 1e6);
+    }
+
+    // --- share accounting with loans outstanding ---
+
+    function test_DepositWhileFullyLentOutPricesSharesAtTotalAssets() public {
+        _depositAndBorrow(900); // pool fully lent: poolBalance 0, receivable = principal + 5%
+        uint256 owed = LOAN + (LOAN * creditLine.INTEREST_BPS()) / 10_000;
+        assertEq(creditLine.poolBalance(), 0);
+        assertEq(creditLine.totalAssets(), owed);
+
+        // Used to divide by zero (poolBalance == 0). Now priced at totalAssets.
+        vm.prank(lender2);
+        uint256 shares = creditLine.deposit(owed);
+        assertEq(shares, POOL);
+    }
+
+    function test_LateDepositorDoesNotDiluteLenderInterest() public {
+        uint256 loanId = _depositAndBorrow(900);
+
+        vm.prank(lender2);
+        creditLine.deposit(POOL);
+
+        vm.prank(bodega);
+        creditLine.repay(loanId);
+
+        // lender funded the loan and earns its whole 5% interest; lender2 just gets its money back.
+        uint256 interest = (LOAN * creditLine.INTEREST_BPS()) / 10_000;
+        uint256 lenderShares = creditLine.lenderShares(lender);
+        vm.prank(lender);
+        creditLine.withdraw(lenderShares);
+        assertEq(usdg.balanceOf(lender), 10_000e6 + interest);
+
+        uint256 lender2Shares = creditLine.lenderShares(lender2);
+        vm.prank(lender2);
+        creditLine.withdraw(lender2Shares);
+        assertEq(usdg.balanceOf(lender2), 10_000e6);
+    }
+
+    function test_RevertWhen_WithdrawingMoreThanLiquidity() public {
+        _depositAndBorrow(900);
+        uint256 shares = creditLine.lenderShares(lender);
+
+        vm.prank(lender);
+        vm.expectRevert(CreditLine.InsufficientPoolLiquidity.selector);
+        creditLine.withdraw(shares);
     }
 
     // --- borrow ---
 
     function test_RevertWhen_NonBodegaBorrows() public {
         vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
+        creditLine.deposit(POOL);
 
-        vm.deal(randomWallet, 10 ether);
         vm.prank(randomWallet);
         vm.expectRevert(CreditLine.NotABodega.selector);
-        creditLine.borrow{value: 1 ether}(1 ether);
+        creditLine.borrow(1e6);
     }
 
     function test_RevertWhen_BorrowingWithoutCertificate() public {
         vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
+        creditLine.deposit(POOL);
 
         vm.prank(bodega);
         vm.expectRevert(CreditLine.NoCertificate.selector);
-        creditLine.borrow{value: 1 ether}(1 ether);
+        creditLine.borrow(1e6);
     }
 
-    function test_RevertWhen_CollateralAmountWrong() public {
+    function test_RevertWhen_CollateralNotApproved() public {
         vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
-        certificate.setThreshold(bodega, 700); // tier: 30%
+        creditLine.deposit(POOL);
+        certificate.setThreshold(bodega, 700);
+        vm.prank(bodega);
+        usdg.approve(address(creditLine), 0);
 
         vm.prank(bodega);
-        vm.expectRevert(CreditLine.WrongCollateralAmount.selector);
-        creditLine.borrow{value: 0.1 ether}(1 ether);
+        vm.expectRevert();
+        creditLine.borrow(100e6);
     }
 
     function test_BorrowWithHighestTierRequiresLeastCollateral() public {
         vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
+        creditLine.deposit(POOL);
         certificate.setThreshold(bodega, 900); // tier: 15%
 
-        uint256 bodegaBalanceBefore = bodega.balance;
-        vm.prank(bodega);
-        uint256 loanId = creditLine.borrow{value: 1.5 ether}(10 ether);
+        assertEq(creditLine.requiredCollateral(bodega, LOAN), 150e6);
 
-        assertEq(bodega.balance, bodegaBalanceBefore - 1.5 ether + 10 ether);
+        uint256 bodegaBalanceBefore = usdg.balanceOf(bodega);
+        vm.prank(bodega);
+        uint256 loanId = creditLine.borrow(LOAN);
+
+        assertEq(usdg.balanceOf(bodega), bodegaBalanceBefore - 150e6 + LOAN);
         (address loanBodega, uint256 principal, uint256 collateral,,, bool resolved) = creditLine.loans(loanId);
         assertEq(loanBodega, bodega);
-        assertEq(principal, 10 ether);
-        assertEq(collateral, 1.5 ether);
+        assertEq(principal, LOAN);
+        assertEq(collateral, 150e6);
         assertFalse(resolved);
         assertEq(creditLine.poolBalance(), 0);
+        assertEq(creditLine.totalReceivable(), LOAN + (LOAN * creditLine.INTEREST_BPS()) / 10_000);
+        assertEq(usdg.balanceOf(address(creditLine)), 150e6);
     }
 
     function test_BorrowWithLowestTierRequiresMostCollateral() public {
         vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
+        creditLine.deposit(POOL);
         certificate.setThreshold(bodega, 500); // tier: 50%
 
+        assertEq(creditLine.requiredCollateral(bodega, LOAN), 500e6);
         vm.prank(bodega);
-        creditLine.borrow{value: 5 ether}(10 ether);
-        // Reached exactly via 50% of 10 ether — no revert means the tier math is right.
+        uint256 loanId = creditLine.borrow(LOAN);
+        (,, uint256 collateral,,,) = creditLine.loans(loanId);
+        assertEq(collateral, 500e6);
     }
 
     function test_RevertWhen_BorrowingMoreThanPoolLiquidity() public {
         vm.prank(lender);
-        creditLine.deposit{value: 1 ether}();
+        creditLine.deposit(1e6);
         certificate.setThreshold(bodega, 900);
 
         vm.prank(bodega);
         vm.expectRevert(CreditLine.InsufficientPoolLiquidity.selector);
-        creditLine.borrow{value: 1.5 ether}(10 ether);
+        creditLine.borrow(LOAN);
     }
 
     // --- repay ---
 
     function test_RepayReturnsCollateralAndFundsPool() public {
-        vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
-        certificate.setThreshold(bodega, 900); // 15%
+        uint256 loanId = _depositAndBorrow(900); // 15%
+
+        uint256 owed = LOAN + (LOAN * creditLine.INTEREST_BPS()) / 10_000;
+        assertEq(creditLine.amountOwed(loanId), owed);
+        uint256 bodegaBalanceBefore = usdg.balanceOf(bodega);
 
         vm.prank(bodega);
-        uint256 loanId = creditLine.borrow{value: 1.5 ether}(10 ether);
+        creditLine.repay(loanId);
 
-        uint256 owed = 10 ether + (10 ether * creditLine.INTEREST_BPS()) / 10_000;
-        uint256 bodegaBalanceBefore = bodega.balance;
-
-        vm.prank(bodega);
-        creditLine.repay{value: owed}(loanId);
-
-        assertEq(bodega.balance, bodegaBalanceBefore - owed + 1.5 ether);
+        assertEq(usdg.balanceOf(bodega), bodegaBalanceBefore - owed + 150e6);
         assertEq(creditLine.poolBalance(), owed); // pool had 0 left, now has principal+interest back
+        assertEq(creditLine.totalReceivable(), 0);
+        assertEq(usdg.balanceOf(address(creditLine)), owed);
         (,,,,, bool resolved) = creditLine.loans(loanId);
         assertTrue(resolved);
     }
 
-    function test_RevertWhen_RepayAmountWrong() public {
-        vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
-        certificate.setThreshold(bodega, 900);
+    function test_RevertWhen_RepayNotApproved() public {
+        uint256 loanId = _depositAndBorrow(900);
         vm.prank(bodega);
-        uint256 loanId = creditLine.borrow{value: 1.5 ether}(10 ether);
+        usdg.approve(address(creditLine), 0);
 
         vm.prank(bodega);
-        vm.expectRevert(CreditLine.WrongRepayAmount.selector);
-        creditLine.repay{value: 1 ether}(loanId);
+        vm.expectRevert();
+        creditLine.repay(loanId);
     }
 
     function test_RevertWhen_NonBorrowerRepays() public {
-        vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
-        certificate.setThreshold(bodega, 900);
-        vm.prank(bodega);
-        uint256 loanId = creditLine.borrow{value: 1.5 ether}(10 ether);
+        uint256 loanId = _depositAndBorrow(900);
 
-        vm.deal(randomWallet, 20 ether);
         vm.prank(randomWallet);
         vm.expectRevert(CreditLine.NotBorrower.selector);
-        creditLine.repay{value: 10.5 ether}(loanId);
+        creditLine.repay(loanId);
     }
 
     // --- liquidate ---
 
     function test_RevertWhen_LiquidatingBeforeDueDate() public {
-        vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
-        certificate.setThreshold(bodega, 900);
-        vm.prank(bodega);
-        uint256 loanId = creditLine.borrow{value: 1.5 ether}(10 ether);
+        uint256 loanId = _depositAndBorrow(900);
 
         vm.expectRevert(CreditLine.NotYetDue.selector);
         creditLine.liquidate(loanId);
     }
 
     function test_LiquidateAfterDueDateSeizesCollateralAndRecordsDefault() public {
-        vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
-        certificate.setThreshold(bodega, 900);
-        vm.prank(bodega);
-        uint256 loanId = creditLine.borrow{value: 1.5 ether}(10 ether);
+        uint256 loanId = _depositAndBorrow(900);
 
         vm.warp(block.timestamp + creditLine.LOAN_DURATION() + 1);
         creditLine.liquidate(loanId);
 
-        assertEq(creditLine.poolBalance(), 1.5 ether); // seized collateral, principal never returned
+        assertEq(creditLine.poolBalance(), 150e6); // seized collateral, principal never returned
+        assertEq(creditLine.totalReceivable(), 0);
+        assertEq(creditLine.totalAssets(), 150e6, "loss is recognized at liquidation");
         assertEq(creditLine.getDefaultCount(bodega), 1);
         (,,,,, bool resolved) = creditLine.loans(loanId);
         assertTrue(resolved);
     }
 
     function test_RevertWhen_ResolvingLoanTwice() public {
-        vm.prank(lender);
-        creditLine.deposit{value: 10 ether}();
-        certificate.setThreshold(bodega, 900);
-        vm.prank(bodega);
-        uint256 loanId = creditLine.borrow{value: 1.5 ether}(10 ether);
+        uint256 loanId = _depositAndBorrow(900);
 
         vm.warp(block.timestamp + creditLine.LOAN_DURATION() + 1);
         creditLine.liquidate(loanId);
 
         vm.expectRevert(CreditLine.AlreadyResolved.selector);
         creditLine.liquidate(loanId);
+    }
+
+    function testFuzz_ContractHoldsExactlyLiquidityPlusCollateral(uint256 deposit, uint256 borrowAmount) public {
+        deposit = bound(deposit, 1e6, 5_000e6);
+        borrowAmount = bound(borrowAmount, 1e6, deposit);
+
+        vm.prank(lender);
+        creditLine.deposit(deposit);
+        certificate.setThreshold(bodega, 700);
+        vm.prank(bodega);
+        uint256 loanId = creditLine.borrow(borrowAmount);
+
+        (,, uint256 collateral,,,) = creditLine.loans(loanId);
+        uint256 interest = (borrowAmount * creditLine.INTEREST_BPS()) / 10_000;
+        assertEq(usdg.balanceOf(address(creditLine)), creditLine.poolBalance() + collateral);
+        assertEq(creditLine.totalAssets(), deposit + interest);
+
+        vm.prank(bodega);
+        creditLine.repay(loanId);
+        assertEq(usdg.balanceOf(address(creditLine)), creditLine.poolBalance());
+        assertEq(creditLine.totalAssets(), deposit + interest);
     }
 
     function test_SetBodegaRegistry_OnlyOwner() public {

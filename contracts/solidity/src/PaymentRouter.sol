@@ -2,13 +2,24 @@
 pragma solidity ^0.8.26;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {PuntosToken} from "./PuntosToken.sol";
 import {IFiadoScoring} from "./interfaces/IFiadoScoring.sol";
+import {StablecoinSettlement} from "./StablecoinSettlement.sol";
 
-/// @notice Entry point for a bodega payment. Accepts native testnet ETH standing in for "eSol"
-/// (a hackathon shortcut — see README for why) mints cashback in PuntosToken, and records the
-/// payment on the FiadoScoring Stylus contract so its on-chain credit score can update.
-contract PaymentRouter is Ownable {
+/// @notice Entry point for a bodega payment. Settles in a USD stablecoin (Paxos USDG on
+/// Arbitrum), pulled straight from the payer to the bodega — the router never holds funds.
+/// Mints cashback in PuntosToken and records the payment on the FiadoScoring Stylus contract
+/// so its on-chain credit score can update.
+///
+/// Unit of account: every amount this contract hands to PuntosToken or FiadoScoring is in
+/// USD-wei (see StablecoinSettlement). That keeps PUNTOS, fiado limits and fiado debt all in
+/// one human-meaningful unit — 1 PUNTO = 1 USD of cashback — and lets PuntosPaymaster price
+/// gas in that same unit.
+contract PaymentRouter is Ownable, StablecoinSettlement {
+    using SafeERC20 for IERC20;
+
     PuntosToken public immutable puntosToken;
     IFiadoScoring public fiadoScoring;
 
@@ -36,7 +47,10 @@ contract PaymentRouter is Ownable {
     event CashbackBpsUpdated(uint256 bps);
     event FiadoRepaid(address indexed bodega, address indexed customer, uint256 amount);
 
-    constructor(address initialOwner, PuntosToken _puntosToken, IFiadoScoring _fiadoScoring) Ownable(initialOwner) {
+    constructor(address initialOwner, PuntosToken _puntosToken, IFiadoScoring _fiadoScoring, IERC20 _stablecoin)
+        Ownable(initialOwner)
+        StablecoinSettlement(_stablecoin)
+    {
         puntosToken = _puntosToken;
         fiadoScoring = _fiadoScoring;
     }
@@ -77,40 +91,40 @@ contract PaymentRouter is Ownable {
         emit CashbackBpsUpdated(bps);
     }
 
-    /// @notice Pay a registered bodega. `msg.value` is the payment amount (native testnet ETH
-    /// standing in for eSol). Cashback is minted to the payer in PuntosToken and the payment is
-    /// recorded on FiadoScoring for credit scoring.
-    function receivePayment(address bodega) external payable {
-        if (msg.value == 0) revert ZeroAmount();
+    /// @notice Pay a registered bodega `amount` of stablecoin (in its own decimals — 6 for
+    /// USDG). Pulled directly from the payer to the bodega, so the payer must have approved
+    /// this router first (the frontend batches approve + receivePayment in one UserOperation).
+    /// Cashback is minted to the payer in PUNTOS and the payment is recorded on FiadoScoring.
+    function receivePayment(address bodega, uint256 amount) external {
+        if (amount == 0) revert ZeroAmount();
         if (!isBodega[bodega]) revert UnknownBodega();
 
-        uint256 cashback = (msg.value * cashbackBps) / BPS_DENOMINATOR;
+        uint256 normalized = _toUsd18(amount);
+        uint256 cashback = (normalized * cashbackBps) / BPS_DENOMINATOR;
 
-        (bool sent,) = payable(bodega).call{value: msg.value}("");
-        require(sent, "transfer to bodega failed");
+        emit PaymentReceived(msg.sender, bodega, amount, cashback);
+
+        stablecoin.safeTransferFrom(msg.sender, bodega, amount);
 
         if (cashback > 0) {
             puntosToken.mint(msg.sender, cashback);
         }
 
-        fiadoScoring.recordPayment(bodega, msg.value, block.timestamp);
-
-        emit PaymentReceived(msg.sender, bodega, msg.value, cashback);
+        fiadoScoring.recordPayment(bodega, normalized, block.timestamp);
     }
 
-    /// @notice Pay back fiado debt owed to `bodega`. `msg.value` is the repayment amount,
-    /// forwarded to the bodega exactly like receivePayment — but recorded as a debt repayment
-    /// on FiadoScoring instead of a new purchase, so no cashback is minted here (clearing a
-    /// debt isn't a new sale to reward).
-    function payFiado(address bodega) external payable {
-        if (msg.value == 0) revert ZeroAmount();
+    /// @notice Pay back fiado debt owed to `bodega`, `amount` in stablecoin decimals. Moves
+    /// funds exactly like receivePayment, but is recorded as a debt repayment on FiadoScoring
+    /// instead of a new purchase, so no cashback is minted here (clearing a debt isn't a new
+    /// sale to reward).
+    function payFiado(address bodega, uint256 amount) external {
+        if (amount == 0) revert ZeroAmount();
         if (!isBodega[bodega]) revert UnknownBodega();
 
-        (bool sent,) = payable(bodega).call{value: msg.value}("");
-        require(sent, "transfer to bodega failed");
+        emit FiadoRepaid(bodega, msg.sender, amount);
 
-        fiadoScoring.repayFiado(bodega, msg.sender, msg.value);
+        stablecoin.safeTransferFrom(msg.sender, bodega, amount);
 
-        emit FiadoRepaid(bodega, msg.sender, msg.value);
+        fiadoScoring.repayFiado(bodega, msg.sender, _toUsd18(amount));
     }
 }

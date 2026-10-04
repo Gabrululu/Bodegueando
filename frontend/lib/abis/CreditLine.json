@@ -17,6 +17,11 @@
           "name": "_creditCertificate",
           "type": "address",
           "internalType": "contract ICreditCertificate"
+        },
+        {
+          "name": "_stablecoin",
+          "type": "address",
+          "internalType": "contract IERC20"
         }
       ],
       "stateMutability": "nonpayable"
@@ -43,6 +48,25 @@
           "name": "",
           "type": "uint64",
           "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "amountOwed",
+      "inputs": [
+        {
+          "name": "loanId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
         }
       ],
       "stateMutability": "view"
@@ -77,7 +101,7 @@
           "internalType": "uint256"
         }
       ],
-      "stateMutability": "payable"
+      "stateMutability": "nonpayable"
     },
     {
       "type": "function",
@@ -114,7 +138,13 @@
     {
       "type": "function",
       "name": "deposit",
-      "inputs": [],
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
       "outputs": [
         {
           "name": "shares",
@@ -122,7 +152,7 @@
           "internalType": "uint256"
         }
       ],
-      "stateMutability": "payable"
+      "stateMutability": "nonpayable"
     },
     {
       "type": "function",
@@ -276,7 +306,31 @@
         }
       ],
       "outputs": [],
-      "stateMutability": "payable"
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "requiredCollateral",
+      "inputs": [
+        {
+          "name": "bodega",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
     },
     {
       "type": "function",
@@ -290,6 +344,32 @@
       ],
       "outputs": [],
       "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "stablecoin",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IERC20"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "stablecoinScale",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
     },
     {
       "type": "function",
@@ -318,6 +398,32 @@
     {
       "type": "function",
       "name": "tiersLength",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "totalAssets",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "totalReceivable",
       "inputs": [],
       "outputs": [
         {
@@ -588,12 +694,23 @@
     },
     {
       "type": "error",
-      "name": "WrongCollateralAmount",
+      "name": "ReentrancyGuardReentrantCall",
       "inputs": []
     },
     {
       "type": "error",
-      "name": "WrongRepayAmount",
+      "name": "SafeERC20FailedOperation",
+      "inputs": [
+        {
+          "name": "token",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "UnsupportedDecimals",
       "inputs": []
     },
     {

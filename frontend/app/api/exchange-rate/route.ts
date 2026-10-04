@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { getEthPenRate } from "@/lib/exchangeRate";
+import { getExchangeRates } from "@/lib/exchangeRate";
 
 export async function GET() {
-  const rate = await getEthPenRate();
+  const rate = await getExchangeRates();
   return NextResponse.json(rate);
 }

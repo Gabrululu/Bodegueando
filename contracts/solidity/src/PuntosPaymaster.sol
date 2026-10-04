@@ -37,10 +37,14 @@ interface IBodegaRegistry {
 ///    their first few steps, same as a normal payment app where "network fee" is never
 ///    something the user has to think about.
 ///
-/// After that, gas is pulled directly in PUNTOS, no price oracle needed for the PUNTOS<->ETH
-/// conversion: PaymentRouter mints PUNTOS in the exact same unit as the ETH payment it came
-/// from (`cashback = msg.value * cashbackBps / 10_000`, i.e. wei), so 1 wei of gas cost is
-/// charged as 1 wei of PUNTOS, 1:1, always.
+/// After that, gas is pulled directly in PUNTOS. PaymentRouter mints PUNTOS in USD-wei
+/// (1e18 PUNTOS = 1 USD of cashback, from USDG payments), while gas is paid in ETH, so the
+/// charge is converted at `puntosPerEth` — an owner-maintained ETH/USD rate, bounded to
+/// [MIN_PUNTOS_PER_ETH, MAX_PUNTOS_PER_ETH] so a bad update can't make gas absurdly cheap or
+/// expensive. It's an owner-set value on purpose, not a live oracle read: ERC-4337 bans a
+/// paymaster's validation from reading storage of unrelated contracts (ERC-7562), and gas
+/// costs are fractions of a cent on Arbitrum, so a rate a few percent stale is immaterial.
+/// Whatever the rate, an account is never charged more than the PUNTOS allowance it granted.
 ///
 /// The contract itself must hold real ETH (deposited into the EntryPoint via the inherited
 /// `deposit()`/`addStake()` from BasePaymaster) to actually pay the bundler/network — PUNTOS
@@ -69,24 +73,43 @@ contract PuntosPaymaster is BasePaymaster {
     /// starts getting pulled from its PUNTOS balance.
     uint256 public constant FREE_TRANSACTIONS = 5;
 
+    /// @notice PUNTOS (USD-wei) charged per 1 ETH of gas, i.e. the ETH/USD price with 18
+    /// decimals. 2500e18 means 1 ETH of gas costs 2500 PUNTOS.
+    uint256 public puntosPerEth;
+
+    uint256 public constant MIN_PUNTOS_PER_ETH = 100 ether;
+    uint256 public constant MAX_PUNTOS_PER_ETH = 100_000 ether;
+
     /// @notice How many of its free transactions an account has already used (successfully).
     mapping(address => uint256) public freeTransactionsUsed;
 
     error InsufficientPuntosAllowance();
     error InsufficientPuntosBalance();
+    error PuntosPerEthOutOfBounds();
 
     event GasChargedInPuntos(address indexed account, uint256 amount);
     event FreeTransactionUsed(address indexed account, uint256 remaining);
     event GasSponsoredForBodega(address indexed bodega);
     event PuntosSwept(address indexed to, uint256 amount);
     event BodegaRegistryUpdated(address indexed bodegaRegistry);
+    event PuntosPerEthUpdated(uint256 puntosPerEth);
 
-    constructor(IEntryPoint _entryPoint, IERC20 _puntosToken, IBodegaRegistry _bodegaRegistry, address _owner)
-        BasePaymaster(_entryPoint)
-    {
+    constructor(
+        IEntryPoint _entryPoint,
+        IERC20 _puntosToken,
+        IBodegaRegistry _bodegaRegistry,
+        address _owner,
+        uint256 _puntosPerEth
+    ) BasePaymaster(_entryPoint) {
         puntosToken = _puntosToken;
         bodegaRegistry = _bodegaRegistry;
+        _setPuntosPerEth(_puntosPerEth);
         _transferOwnership(_owner);
+    }
+
+    /// @notice PUNTOS an account would be charged for `gasCostWei` of gas at the current rate.
+    function gasCostInPuntos(uint256 gasCostWei) public view returns (uint256) {
+        return (gasCostWei * puntosPerEth) / 1 ether;
     }
 
     function _validatePaymasterUserOp(PackedUserOperation calldata userOp, bytes32, uint256 maxCost)
@@ -105,8 +128,9 @@ contract PuntosPaymaster is BasePaymaster {
             return (abi.encode(account, ChargeMode.FreeTransaction), 0);
         }
 
-        if (puntosToken.allowance(account, address(this)) < maxCost) revert InsufficientPuntosAllowance();
-        if (puntosToken.balanceOf(account) < maxCost) revert InsufficientPuntosBalance();
+        uint256 maxCharge = gasCostInPuntos(maxCost);
+        if (puntosToken.allowance(account, address(this)) < maxCharge) revert InsufficientPuntosAllowance();
+        if (puntosToken.balanceOf(account) < maxCharge) revert InsufficientPuntosBalance();
 
         return (abi.encode(account, ChargeMode.Chargeable), 0);
     }
@@ -141,7 +165,8 @@ contract PuntosPaymaster is BasePaymaster {
         uint256 available = puntosToken.allowance(account, address(this));
         uint256 balance = puntosToken.balanceOf(account);
         if (balance < available) available = balance;
-        uint256 charge = actualGasCost > available ? available : actualGasCost;
+        uint256 owed = gasCostInPuntos(actualGasCost);
+        uint256 charge = owed > available ? available : owed;
 
         if (charge > 0) {
             puntosToken.safeTransferFrom(account, address(this), charge);
@@ -162,5 +187,19 @@ contract PuntosPaymaster is BasePaymaster {
     function setBodegaRegistry(IBodegaRegistry _bodegaRegistry) external onlyOwner {
         bodegaRegistry = _bodegaRegistry;
         emit BodegaRegistryUpdated(address(_bodegaRegistry));
+    }
+
+    /// @notice Updates the ETH/USD rate gas is converted to PUNTOS at. See the contract doc
+    /// for why this is owner-maintained rather than read from an oracle during validation.
+    function setPuntosPerEth(uint256 _puntosPerEth) external onlyOwner {
+        _setPuntosPerEth(_puntosPerEth);
+    }
+
+    function _setPuntosPerEth(uint256 _puntosPerEth) internal {
+        if (_puntosPerEth < MIN_PUNTOS_PER_ETH || _puntosPerEth > MAX_PUNTOS_PER_ETH) {
+            revert PuntosPerEthOutOfBounds();
+        }
+        puntosPerEth = _puntosPerEth;
+        emit PuntosPerEthUpdated(_puntosPerEth);
     }
 }

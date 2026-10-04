@@ -2,8 +2,10 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {InvoiceEscrow, IBodegaRegistry} from "../src/InvoiceEscrow.sol";
 import {MockFiadoScoring} from "./mocks/MockFiadoScoring.sol";
+import {MockUSDG} from "./mocks/MockUSDG.sol";
 
 /// @notice Test double standing in for PaymentRouter's isBodega registry — same pattern as
 /// BeneficioToken.t.sol's MockBodegaRegistry.
@@ -19,31 +21,42 @@ contract InvoiceEscrowTest is Test {
     InvoiceEscrow escrow;
     MockBodegaRegistry registry;
     MockFiadoScoring fiadoScoring;
+    MockUSDG usdg;
 
     address owner = makeAddr("owner");
     address bodega = makeAddr("bodega");
     address customer = makeAddr("customer");
     address randomWallet = makeAddr("randomWallet");
 
-    uint256 constant PRINCIPAL = 1 ether;
-    uint256 constant COLLATERAL = 0.3 ether;
+    // Stablecoin amounts (USDG, 6 decimals). FiadoScoring sees them as USD-wei (x 1e12).
+    uint256 constant PRINCIPAL = 100e6;
+    uint256 constant COLLATERAL = 30e6;
+    uint256 constant SCALE = 1e12;
 
     function setUp() public {
         registry = new MockBodegaRegistry();
         registry.setBodega(bodega, true);
 
         fiadoScoring = new MockFiadoScoring();
+        usdg = new MockUSDG();
 
-        escrow = new InvoiceEscrow(owner, registry, fiadoScoring);
+        escrow = new InvoiceEscrow(owner, registry, fiadoScoring, IERC20(address(usdg)));
         fiadoScoring.setEscrow(address(escrow));
 
-        vm.deal(customer, 10 ether);
-        vm.deal(bodega, 10 ether);
+        usdg.mint(customer, 1_000e6);
+        vm.prank(customer);
+        usdg.approve(address(escrow), type(uint256).max);
     }
 
     function _propose() internal returns (uint256 id) {
         vm.prank(bodega);
         id = escrow.proposeInvoice(customer, PRINCIPAL, COLLATERAL, uint64(block.timestamp + 7 days));
+    }
+
+    function _proposeAndAccept() internal returns (uint256 id) {
+        id = _propose();
+        vm.prank(customer);
+        escrow.acceptInvoice(id);
     }
 
     function test_OnlyRegisteredBodegaCanPropose() public {
@@ -77,86 +90,99 @@ contract InvoiceEscrowTest is Test {
 
         vm.prank(customer);
         vm.expectRevert(InvoiceEscrow.InvalidState.selector);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+        escrow.acceptInvoice(id);
     }
 
-    function test_AcceptInvoiceRequiresExactCollateralAndRecordsDebt() public {
-        uint256 id = _propose();
-
-        vm.prank(customer);
-        vm.expectRevert(InvoiceEscrow.WrongCollateralAmount.selector);
-        escrow.acceptInvoice{value: COLLATERAL - 1}(id);
-
-        vm.prank(customer);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+    function test_AcceptInvoicePullsCollateralAndRecordsDebtInUsd18() public {
+        uint256 id = _proposeAndAccept();
 
         (,,,,,, InvoiceEscrow.Status status) = escrow.invoices(id);
         assertEq(uint8(status), uint8(InvoiceEscrow.Status.Active));
-        assertEq(address(escrow).balance, COLLATERAL);
-        assertEq(fiadoScoring.fiadoDebt(bodega, customer), PRINCIPAL);
+        assertEq(usdg.balanceOf(address(escrow)), COLLATERAL);
+        assertEq(usdg.balanceOf(customer), 1_000e6 - COLLATERAL);
+        assertEq(fiadoScoring.fiadoDebt(bodega, customer), PRINCIPAL * SCALE);
+    }
+
+    function test_AcceptInvoiceWithZeroCollateral() public {
+        vm.prank(bodega);
+        uint256 id = escrow.proposeInvoice(customer, PRINCIPAL, 0, uint64(block.timestamp + 7 days));
+        vm.prank(customer);
+        escrow.acceptInvoice(id);
+
+        assertEq(usdg.balanceOf(address(escrow)), 0);
+        assertEq(fiadoScoring.fiadoDebt(bodega, customer), PRINCIPAL * SCALE);
+    }
+
+    function test_RevertWhen_AcceptingWithoutApproval() public {
+        uint256 id = _propose();
+        vm.prank(customer);
+        usdg.approve(address(escrow), 0);
+
+        vm.prank(customer);
+        vm.expectRevert();
+        escrow.acceptInvoice(id);
     }
 
     function test_RevertWhen_AcceptingAlreadyActiveInvoice() public {
-        uint256 id = _propose();
-        vm.prank(customer);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+        uint256 id = _proposeAndAccept();
 
         vm.prank(customer);
         vm.expectRevert(InvoiceEscrow.InvalidState.selector);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+        escrow.acceptInvoice(id);
     }
 
     function test_RevertWhen_NonCustomerAccepts() public {
         uint256 id = _propose();
-        vm.deal(randomWallet, 1 ether);
         vm.prank(randomWallet);
         vm.expectRevert(InvoiceEscrow.NotInvoiceCustomer.selector);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+        escrow.acceptInvoice(id);
     }
 
     function test_PartialRepaymentDoesNotReleaseCollateral() public {
-        uint256 id = _propose();
-        vm.prank(customer);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+        uint256 id = _proposeAndAccept();
 
-        uint256 customerBalanceBefore = customer.balance;
+        uint256 customerBalanceBefore = usdg.balanceOf(customer);
         vm.prank(customer);
-        escrow.repayInvoice{value: PRINCIPAL / 2}(id);
+        escrow.repayInvoice(id, PRINCIPAL / 2);
 
         (,,, uint256 collateral, uint256 repaidAmount,, InvoiceEscrow.Status status) = escrow.invoices(id);
         assertEq(repaidAmount, PRINCIPAL / 2);
         assertEq(collateral, COLLATERAL, "collateral must still be held");
         assertEq(uint8(status), uint8(InvoiceEscrow.Status.Active));
-        assertEq(fiadoScoring.fiadoDebt(bodega, customer), PRINCIPAL - PRINCIPAL / 2);
-        assertEq(customer.balance, customerBalanceBefore - PRINCIPAL / 2, "no refund expected on exact partial payment");
+        assertEq(fiadoScoring.fiadoDebt(bodega, customer), (PRINCIPAL - PRINCIPAL / 2) * SCALE);
+        assertEq(usdg.balanceOf(customer), customerBalanceBefore - PRINCIPAL / 2);
+        assertEq(usdg.balanceOf(bodega), PRINCIPAL / 2, "repayment goes straight to the bodega");
     }
 
-    function test_FullRepaymentReleasesCollateralAndOverpaymentRefunds() public {
-        uint256 id = _propose();
-        vm.prank(customer);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+    function test_FullRepaymentReleasesCollateralAndNeverPullsOverpayment() public {
+        uint256 id = _proposeAndAccept();
 
-        uint256 customerBalanceBefore = customer.balance;
-        uint256 bodegaBalanceBefore = bodega.balance;
+        uint256 customerBalanceBefore = usdg.balanceOf(customer);
 
-        // Overpay by 0.1 ether — should be refunded, only PRINCIPAL applied.
+        // Ask to pay 10 USDG more than owed — only PRINCIPAL is pulled.
         vm.prank(customer);
-        escrow.repayInvoice{value: PRINCIPAL + 0.1 ether}(id);
+        escrow.repayInvoice(id, PRINCIPAL + 10e6);
 
         (,,, uint256 collateral, uint256 repaidAmount,, InvoiceEscrow.Status status) = escrow.invoices(id);
         assertEq(repaidAmount, PRINCIPAL);
         assertEq(collateral, 0, "collateral must be released");
         assertEq(uint8(status), uint8(InvoiceEscrow.Status.Repaid));
         assertEq(fiadoScoring.fiadoDebt(bodega, customer), 0);
-        assertEq(bodega.balance, bodegaBalanceBefore + PRINCIPAL);
+        assertEq(usdg.balanceOf(bodega), PRINCIPAL);
+        assertEq(usdg.balanceOf(address(escrow)), 0);
         // Customer paid PRINCIPAL net, but got the collateral back.
-        assertEq(customer.balance, customerBalanceBefore - PRINCIPAL + COLLATERAL);
+        assertEq(usdg.balanceOf(customer), customerBalanceBefore - PRINCIPAL + COLLATERAL);
+    }
+
+    function test_RevertWhen_RepayingZero() public {
+        uint256 id = _proposeAndAccept();
+        vm.prank(customer);
+        vm.expectRevert(InvoiceEscrow.ZeroAmount.selector);
+        escrow.repayInvoice(id, 0);
     }
 
     function test_RevertWhen_ClaimingBeforeDueDate() public {
-        uint256 id = _propose();
-        vm.prank(customer);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+        uint256 id = _proposeAndAccept();
 
         vm.prank(bodega);
         vm.expectRevert(InvoiceEscrow.NotYetDue.selector);
@@ -164,9 +190,7 @@ contract InvoiceEscrowTest is Test {
     }
 
     function test_RevertWhen_NonBodegaClaims() public {
-        uint256 id = _propose();
-        vm.prank(customer);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+        uint256 id = _proposeAndAccept();
         vm.warp(block.timestamp + 8 days);
 
         vm.prank(randomWallet);
@@ -175,63 +199,80 @@ contract InvoiceEscrowTest is Test {
     }
 
     function test_ClaimAfterDueDateTransfersShortfallAndRefundsRest() public {
-        uint256 id = _propose();
-        vm.prank(customer);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
+        uint256 id = _proposeAndAccept();
 
         // Customer repays part of it before defaulting on the rest.
         vm.prank(customer);
-        escrow.repayInvoice{value: 0.8 ether}(id);
-        // Outstanding shortfall is PRINCIPAL - 0.8 ether = 0.2 ether, less than COLLATERAL (0.3 ether).
+        escrow.repayInvoice(id, 80e6);
+        // Outstanding shortfall is 20 USDG, less than COLLATERAL (30 USDG).
 
         vm.warp(block.timestamp + 8 days);
 
-        uint256 bodegaBalanceBefore = bodega.balance;
-        uint256 customerBalanceBefore = customer.balance;
+        uint256 bodegaBalanceBefore = usdg.balanceOf(bodega);
+        uint256 customerBalanceBefore = usdg.balanceOf(customer);
 
         vm.prank(bodega);
         escrow.claimCollateral(id);
 
-        uint256 expectedClaim = 0.2 ether;
+        uint256 expectedClaim = 20e6;
         uint256 expectedRefund = COLLATERAL - expectedClaim;
 
         (,,, uint256 collateral,,, InvoiceEscrow.Status status) = escrow.invoices(id);
         assertEq(collateral, 0);
         assertEq(uint8(status), uint8(InvoiceEscrow.Status.Defaulted));
-        assertEq(bodega.balance, bodegaBalanceBefore + expectedClaim);
-        assertEq(customer.balance, customerBalanceBefore + expectedRefund);
+        assertEq(usdg.balanceOf(bodega), bodegaBalanceBefore + expectedClaim);
+        assertEq(usdg.balanceOf(customer), customerBalanceBefore + expectedRefund);
+        assertEq(usdg.balanceOf(address(escrow)), 0);
         assertEq(fiadoScoring.fiadoDebt(bodega, customer), 0);
     }
 
     function test_ClaimCapsAtCollateralWhenShortfallExceedsIt() public {
         // Collateral smaller than principal, customer repays nothing at all.
         vm.prank(bodega);
-        uint256 id = escrow.proposeInvoice(customer, 1 ether, 0.1 ether, uint64(block.timestamp + 1 days));
+        uint256 id = escrow.proposeInvoice(customer, 100e6, 10e6, uint64(block.timestamp + 1 days));
         vm.prank(customer);
-        escrow.acceptInvoice{value: 0.1 ether}(id);
+        escrow.acceptInvoice(id);
 
         vm.warp(block.timestamp + 2 days);
 
-        uint256 bodegaBalanceBefore = bodega.balance;
         vm.prank(bodega);
         escrow.claimCollateral(id);
 
-        // Shortfall is the full 1 ether, but only 0.1 ether collateral exists to claim.
-        assertEq(bodega.balance, bodegaBalanceBefore + 0.1 ether);
-        assertEq(fiadoScoring.fiadoDebt(bodega, customer), 1 ether - 0.1 ether, "remaining debt stays on the ledger");
+        // Shortfall is the full 100 USDG, but only 10 USDG collateral exists to claim.
+        assertEq(usdg.balanceOf(bodega), 10e6);
+        assertEq(fiadoScoring.fiadoDebt(bodega, customer), 90e6 * SCALE, "remaining debt stays on the ledger");
     }
 
     function test_RevertWhen_ClaimingAlreadyResolvedInvoice() public {
-        uint256 id = _propose();
+        uint256 id = _proposeAndAccept();
         vm.prank(customer);
-        escrow.acceptInvoice{value: COLLATERAL}(id);
-        vm.prank(customer);
-        escrow.repayInvoice{value: PRINCIPAL}(id);
+        escrow.repayInvoice(id, PRINCIPAL);
 
         vm.warp(block.timestamp + 8 days);
         vm.prank(bodega);
         vm.expectRevert(InvoiceEscrow.InvalidState.selector);
         escrow.claimCollateral(id);
+    }
+
+    function testFuzz_EscrowNeverHoldsMoreThanActiveCollateral(uint256 repay1, uint256 repay2) public {
+        uint256 id = _proposeAndAccept();
+        repay1 = bound(repay1, 1, PRINCIPAL * 2);
+        repay2 = bound(repay2, 1, PRINCIPAL * 2);
+
+        vm.prank(customer);
+        escrow.repayInvoice(id, repay1);
+        (,,, uint256 collateral,,, InvoiceEscrow.Status status) = escrow.invoices(id);
+        assertEq(usdg.balanceOf(address(escrow)), collateral);
+
+        if (status == InvoiceEscrow.Status.Active) {
+            vm.prank(customer);
+            escrow.repayInvoice(id, repay2);
+            (,,, collateral,,,) = escrow.invoices(id);
+            assertEq(usdg.balanceOf(address(escrow)), collateral);
+        }
+        (,,,, uint256 repaid,,) = escrow.invoices(id);
+        assertLe(repaid, PRINCIPAL);
+        assertEq(usdg.balanceOf(bodega), repaid);
     }
 
     function test_SetBodegaRegistry_OnlyOwner() public {

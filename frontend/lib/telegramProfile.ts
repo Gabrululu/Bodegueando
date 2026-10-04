@@ -9,7 +9,7 @@ import {
   puntosTokenAbi,
   puntosTokenAddress,
 } from "./contracts";
-import { getEthPenRate } from "./exchangeRate";
+import { getExchangeRates } from "./exchangeRate";
 import { confianzaLabel } from "./fiado";
 
 const rpcUrl = process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL;
@@ -18,9 +18,10 @@ function client() {
   return createPublicClient({ chain: arbitrumSepolia, transport: http(rpcUrl) });
 }
 
-function formatSoles(weiAmount: bigint, ethPen: number): string {
-  const eth = Number(weiAmount) / 1e18;
-  return `S/ ${(eth * ethPen).toFixed(2)}`;
+/** Límite de fiado y PUNTOS están en USD con 18 decimales (PaymentRouter cobra en USDG). */
+function formatSoles(usdAmount18: bigint, usdPen: number): string {
+  const usd = Number(usdAmount18) / 1e18;
+  return `S/ ${(usd * usdPen).toFixed(2)}`;
 }
 
 /**
@@ -40,7 +41,7 @@ export async function getProfileText(chatId: number): Promise<string> {
   }
 
   const c = client();
-  const { ethPen } = await getEthPenRate();
+  const { usdPen } = await getExchangeRates();
 
   const isBodega = await c.readContract({
     address: paymentRouterAddress,
@@ -83,7 +84,7 @@ export async function getProfileText(chatId: number): Promise<string> {
       `Pagos recibidos: ${amounts.length}`,
       `Confianza: ${confianza.text} (${score}/1000)`,
       fiadoEnabled
-        ? `Fiado: activado, ofreces hasta ${formatSoles(creditLimit, ethPen)} a tus clientes.`
+        ? `Fiado: activado, ofreces hasta ${formatSoles(creditLimit, usdPen)} a tus clientes.`
         : "Fiado: apagado por ahora.",
     ];
     return lines.join("\n");
@@ -96,5 +97,5 @@ export async function getProfileText(chatId: number): Promise<string> {
     args: [address as `0x${string}`],
   })) as bigint;
 
-  return `🛍️ Tu cuenta en Bodegueando\nTienes ${formatSoles(points, ethPen)} en puntos acumulados por cashback.`;
+  return `🛍️ Tu cuenta en Bodegueando\nTienes ${formatSoles(points, usdPen)} en puntos acumulados por cashback.`;
 }

@@ -2,6 +2,10 @@
 pragma solidity ^0.8.26;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {StablecoinSettlement} from "./StablecoinSettlement.sol";
 
 /// @notice Minimal read-only view into PaymentRouter's bodega registry — same narrow
 /// interface BeneficioToken.sol/InvoiceEscrow.sol/RewardsCatalog.sol each declare locally.
@@ -12,7 +16,7 @@ interface IBodegaRegistry {
 /// @notice Compras conjuntas entre bodegas: una bodega alejada suele perder ventas porque el
 /// distribuidor no llega hasta ella, o porque el pedido mínimo que exige el distribuidor es
 /// más de lo que una sola bodega necesita. Este contrato junta el aporte de varias bodegas
-/// hacia una meta en ETH (el mismo stand-in de eSol que usa el resto de la app) hasta
+/// hacia una meta en el stablecoin de la app (USDG, en sus propios decimales) hasta
 /// alcanzar ese mínimo; la bodega organizadora retira el fondo para comprarle al distribuidor
 /// en la vida real (no es un actor on-chain) y reparte la mercadería según lo que aportó cada
 /// una — ese reparto es física/manual, este contrato solo deja el registro auditable de quién
@@ -30,7 +34,9 @@ interface IBodegaRegistry {
 /// nunca retira dentro de `withdrawWindowSeconds` después del cierre de aportes, cualquier
 /// bodega que aportó puede reclamar su parte de vuelta — el fondo nunca queda atrapado para
 /// siempre.
-contract GroupOrders is Ownable {
+contract GroupOrders is Ownable, ReentrancyGuard, StablecoinSettlement {
+    using SafeERC20 for IERC20;
+
     struct GroupOrder {
         address organizer;
         string title;
@@ -69,7 +75,10 @@ contract GroupOrders is Ownable {
     event Refunded(uint256 indexed id, address indexed bodega, uint256 amount);
     event BodegaRegistryUpdated(address indexed bodegaRegistry);
 
-    constructor(address initialOwner, IBodegaRegistry _bodegaRegistry) Ownable(initialOwner) {
+    constructor(address initialOwner, IBodegaRegistry _bodegaRegistry, IERC20 _stablecoin)
+        Ownable(initialOwner)
+        StablecoinSettlement(_stablecoin)
+    {
         bodegaRegistry = _bodegaRegistry;
     }
 
@@ -79,7 +88,7 @@ contract GroupOrders is Ownable {
         emit BodegaRegistryUpdated(address(_bodegaRegistry));
     }
 
-    /// @notice Bodega registrada organiza un pedido grupal. `goal` es el mínimo en ETH a
+    /// @notice Bodega registrada organiza un pedido grupal. `goal` es el mínimo en stablecoin a
     /// juntar, `pledgeDeadline` hasta cuándo se puede aportar, `withdrawWindowSeconds` el
     /// plazo de gracia que la organizadora tiene para retirar después de `pledgeDeadline` una
     /// vez alcanzado `goal`.
@@ -106,38 +115,42 @@ contract GroupOrders is Ownable {
         emit GroupOrderCreated(id, msg.sender, goal, pledgeDeadline, withdrawWindowSeconds);
     }
 
-    /// @notice Cualquier bodega registrada (incluida la organizadora) aporta ETH antes de
-    /// `pledgeDeadline`. Queda registrado por bodega, no es anónimo.
-    function pledge(uint256 id) external payable {
+    /// @notice Cualquier bodega registrada (incluida la organizadora) aporta `amount` de
+    /// stablecoin antes de `pledgeDeadline` (requiere approve previo). Queda registrado por
+    /// bodega, no es anónimo.
+    function pledge(uint256 id, uint256 amount) external nonReentrant {
         GroupOrder storage order = groupOrders[id];
         if (order.organizer == address(0)) revert OrderNotFound();
         if (!bodegaRegistry.isBodega(msg.sender)) revert NotABodega();
-        if (msg.value == 0) revert ZeroAmount();
+        if (amount == 0) revert ZeroAmount();
         if (block.timestamp > order.pledgeDeadline) revert PledgingClosed();
 
-        pledges[id][msg.sender] += msg.value;
-        order.pledged += msg.value;
+        pledges[id][msg.sender] += amount;
+        order.pledged += amount;
 
-        emit Pledged(id, msg.sender, msg.value, order.pledged);
+        stablecoin.safeTransferFrom(msg.sender, address(this), amount);
+
+        emit Pledged(id, msg.sender, amount, order.pledged);
     }
 
     /// @notice La organizadora retira el fondo completo para comprarle al distribuidor.
     /// Requiere que ya haya cerrado el período de aportes, que se haya alcanzado `goal`, y
     /// que todavía esté dentro de `withdrawWindowSeconds`.
-    function withdraw(uint256 id) external {
+    function withdraw(uint256 id) external nonReentrant {
         GroupOrder storage order = groupOrders[id];
         if (order.organizer == address(0)) revert OrderNotFound();
         if (order.organizer != msg.sender) revert NotOrganizer();
         if (order.withdrawn) revert AlreadyWithdrawn();
         if (block.timestamp <= order.pledgeDeadline) revert NotYetDue();
         if (order.pledged < order.goal) revert GoalNotReached();
-        if (block.timestamp > uint256(order.pledgeDeadline) + order.withdrawWindowSeconds) revert WithdrawWindowExpired();
+        if (block.timestamp > uint256(order.pledgeDeadline) + order.withdrawWindowSeconds) {
+            revert WithdrawWindowExpired();
+        }
 
         order.withdrawn = true;
         uint256 amount = order.pledged;
 
-        (bool sent,) = payable(msg.sender).call{value: amount}("");
-        require(sent, "withdraw transfer failed");
+        stablecoin.safeTransfer(msg.sender, amount);
 
         emit Withdrawn(id, msg.sender, amount);
     }
@@ -148,7 +161,7 @@ contract GroupOrders is Ownable {
     /// nunca se descuenta acá a propósito — es el registro histórico de cuánto se juntó en
     /// total, usado para decidir si el pedido "alcanzó la meta"; lo que sí se pone en cero es
     /// el aporte individual de quien reclama, para que no pueda reembolsarse dos veces.
-    function refund(uint256 id) external {
+    function refund(uint256 id) external nonReentrant {
         GroupOrder storage order = groupOrders[id];
         if (order.organizer == address(0)) revert OrderNotFound();
 
@@ -156,14 +169,13 @@ contract GroupOrders is Ownable {
         if (amount == 0) revert NothingToRefund();
 
         bool goalFailed = block.timestamp > order.pledgeDeadline && order.pledged < order.goal;
-        bool withdrawExpired =
-            order.pledged >= order.goal && !order.withdrawn && block.timestamp > uint256(order.pledgeDeadline) + order.withdrawWindowSeconds;
+        bool withdrawExpired = order.pledged >= order.goal && !order.withdrawn
+            && block.timestamp > uint256(order.pledgeDeadline) + order.withdrawWindowSeconds;
         if (!goalFailed && !withdrawExpired) revert NotYetRefundable();
 
         pledges[id][msg.sender] = 0;
 
-        (bool sent,) = payable(msg.sender).call{value: amount}("");
-        require(sent, "refund transfer failed");
+        stablecoin.safeTransfer(msg.sender, amount);
 
         emit Refunded(id, msg.sender, amount);
     }

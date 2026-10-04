@@ -2,7 +2,9 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {GroupOrders, IBodegaRegistry} from "../src/GroupOrders.sol";
+import {MockUSDG} from "./mocks/MockUSDG.sol";
 
 /// @notice Test double standing in for PaymentRouter's isBodega registry — same pattern as
 /// BeneficioToken.t.sol/InvoiceEscrow.t.sol/RewardsCatalog.t.sol's MockBodegaRegistry.
@@ -24,7 +26,10 @@ contract GroupOrdersTest is Test {
     address contributor2 = makeAddr("contributor2");
     address randomWallet = makeAddr("randomWallet");
 
-    uint256 constant GOAL = 1 ether;
+    MockUSDG usdg;
+
+    // Stablecoin amounts (USDG, 6 decimals).
+    uint256 constant GOAL = 1_000e6;
     uint64 constant WITHDRAW_WINDOW = 7 days;
 
     function setUp() public {
@@ -33,11 +38,18 @@ contract GroupOrdersTest is Test {
         registry.setBodega(contributor1, true);
         registry.setBodega(contributor2, true);
 
-        orders = new GroupOrders(owner, registry);
+        usdg = new MockUSDG();
+        orders = new GroupOrders(owner, registry, IERC20(address(usdg)));
 
-        vm.deal(organizer, 10 ether);
-        vm.deal(contributor1, 10 ether);
-        vm.deal(contributor2, 10 ether);
+        _fund(organizer);
+        _fund(contributor1);
+        _fund(contributor2);
+    }
+
+    function _fund(address account) internal {
+        usdg.mint(account, 10_000e6);
+        vm.prank(account);
+        usdg.approve(address(orders), type(uint256).max);
     }
 
     function _createOrder(uint64 pledgeDeadline) internal returns (uint256 id) {
@@ -76,33 +88,33 @@ contract GroupOrdersTest is Test {
 
     function test_OnlyRegisteredBodegaCanPledge() public {
         uint256 id = _createOrder(uint64(block.timestamp + 1 days));
-        vm.deal(randomWallet, 1 ether);
+        _fund(randomWallet);
         vm.prank(randomWallet);
         vm.expectRevert(GroupOrders.NotABodega.selector);
-        orders.pledge{value: 0.1 ether}(id);
+        orders.pledge(id, 100e6);
     }
 
     function test_PledgeAccumulatesAndTracksPerBodega() public {
         uint256 id = _createOrder(uint64(block.timestamp + 1 days));
 
         vm.prank(contributor1);
-        orders.pledge{value: 0.4 ether}(id);
+        orders.pledge(id, 400e6);
         vm.prank(contributor2);
-        orders.pledge{value: 0.3 ether}(id);
+        orders.pledge(id, 300e6);
         vm.prank(contributor1);
-        orders.pledge{value: 0.1 ether}(id);
+        orders.pledge(id, 100e6);
 
         (,,, uint256 pledged,,,) = orders.groupOrders(id);
-        assertEq(pledged, 0.8 ether);
-        assertEq(orders.pledges(id, contributor1), 0.5 ether);
-        assertEq(orders.pledges(id, contributor2), 0.3 ether);
+        assertEq(pledged, 800e6);
+        assertEq(orders.pledges(id, contributor1), 500e6);
+        assertEq(orders.pledges(id, contributor2), 300e6);
     }
 
     function test_RevertWhen_PledgingZero() public {
         uint256 id = _createOrder(uint64(block.timestamp + 1 days));
         vm.prank(contributor1);
         vm.expectRevert(GroupOrders.ZeroAmount.selector);
-        orders.pledge{value: 0}(id);
+        orders.pledge(id, 0);
     }
 
     function test_RevertWhen_PledgingAfterDeadline() public {
@@ -112,13 +124,13 @@ contract GroupOrdersTest is Test {
 
         vm.prank(contributor1);
         vm.expectRevert(GroupOrders.PledgingClosed.selector);
-        orders.pledge{value: 0.1 ether}(id);
+        orders.pledge(id, 100e6);
     }
 
     function test_RevertWhen_PledgingUnknownOrder() public {
         vm.prank(contributor1);
         vm.expectRevert(GroupOrders.OrderNotFound.selector);
-        orders.pledge{value: 0.1 ether}(999);
+        orders.pledge(999, 100e6);
     }
 
     // --- withdraw ---
@@ -126,7 +138,7 @@ contract GroupOrdersTest is Test {
     function test_RevertWhen_WithdrawingBeforeDeadline() public {
         uint256 id = _createOrder(uint64(block.timestamp + 1 days));
         vm.prank(contributor1);
-        orders.pledge{value: GOAL}(id);
+        orders.pledge(id, GOAL);
 
         vm.prank(organizer);
         vm.expectRevert(GroupOrders.NotYetDue.selector);
@@ -137,7 +149,7 @@ contract GroupOrdersTest is Test {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 id = _createOrder(deadline);
         vm.prank(contributor1);
-        orders.pledge{value: GOAL / 2}(id);
+        orders.pledge(id, GOAL / 2);
         vm.warp(deadline + 1);
 
         vm.prank(organizer);
@@ -149,7 +161,7 @@ contract GroupOrdersTest is Test {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 id = _createOrder(deadline);
         vm.prank(contributor1);
-        orders.pledge{value: GOAL}(id);
+        orders.pledge(id, GOAL);
         vm.warp(deadline + 1);
 
         vm.prank(contributor1);
@@ -161,7 +173,7 @@ contract GroupOrdersTest is Test {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 id = _createOrder(deadline);
         vm.prank(contributor1);
-        orders.pledge{value: GOAL}(id);
+        orders.pledge(id, GOAL);
         vm.warp(deadline + WITHDRAW_WINDOW + 1);
 
         vm.prank(organizer);
@@ -173,15 +185,15 @@ contract GroupOrdersTest is Test {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 id = _createOrder(deadline);
         vm.prank(contributor1);
-        orders.pledge{value: 0.6 ether}(id);
+        orders.pledge(id, 600e6);
         vm.prank(contributor2);
-        orders.pledge{value: 0.5 ether}(id);
+        orders.pledge(id, 500e6);
         vm.warp(deadline + 1);
 
-        uint256 organizerBalanceBefore = organizer.balance;
+        uint256 organizerBalanceBefore = usdg.balanceOf(organizer);
         vm.prank(organizer);
         orders.withdraw(id);
-        assertEq(organizer.balance, organizerBalanceBefore + 1.1 ether);
+        assertEq(usdg.balanceOf(organizer), organizerBalanceBefore + 1_100e6);
 
         (,,,,,, bool withdrawn) = orders.groupOrders(id);
         assertTrue(withdrawn);
@@ -196,7 +208,7 @@ contract GroupOrdersTest is Test {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 id = _createOrder(deadline);
         vm.prank(contributor1);
-        orders.pledge{value: GOAL}(id);
+        orders.pledge(id, GOAL);
         vm.warp(deadline + 1);
 
         vm.prank(organizer);
@@ -213,7 +225,7 @@ contract GroupOrdersTest is Test {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 id = _createOrder(deadline);
         vm.prank(contributor1);
-        orders.pledge{value: GOAL / 2}(id);
+        orders.pledge(id, GOAL / 2);
 
         vm.prank(contributor1);
         vm.expectRevert(GroupOrders.NotYetRefundable.selector);
@@ -221,10 +233,10 @@ contract GroupOrdersTest is Test {
 
         vm.warp(deadline + 1);
 
-        uint256 balanceBefore = contributor1.balance;
+        uint256 balanceBefore = usdg.balanceOf(contributor1);
         vm.prank(contributor1);
         orders.refund(id);
-        assertEq(contributor1.balance, balanceBefore + GOAL / 2);
+        assertEq(usdg.balanceOf(contributor1), balanceBefore + GOAL / 2);
         assertEq(orders.pledges(id, contributor1), 0);
     }
 
@@ -232,9 +244,9 @@ contract GroupOrdersTest is Test {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 id = _createOrder(deadline);
         vm.prank(contributor1);
-        orders.pledge{value: 0.6 ether}(id);
+        orders.pledge(id, 600e6);
         vm.prank(contributor2);
-        orders.pledge{value: 0.5 ether}(id);
+        orders.pledge(id, 500e6);
         vm.warp(deadline + 1);
 
         // Goal was reached — refund is not yet allowed inside the withdraw window.
@@ -244,22 +256,22 @@ contract GroupOrdersTest is Test {
 
         vm.warp(deadline + WITHDRAW_WINDOW + 1);
 
-        uint256 balance1Before = contributor1.balance;
+        uint256 balance1Before = usdg.balanceOf(contributor1);
         vm.prank(contributor1);
         orders.refund(id);
-        assertEq(contributor1.balance, balance1Before + 0.6 ether);
+        assertEq(usdg.balanceOf(contributor1), balance1Before + 600e6);
 
-        uint256 balance2Before = contributor2.balance;
+        uint256 balance2Before = usdg.balanceOf(contributor2);
         vm.prank(contributor2);
         orders.refund(id);
-        assertEq(contributor2.balance, balance2Before + 0.5 ether);
+        assertEq(usdg.balanceOf(contributor2), balance2Before + 500e6);
     }
 
     function test_RevertWhen_RefundingTwice() public {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 id = _createOrder(deadline);
         vm.prank(contributor1);
-        orders.pledge{value: GOAL / 2}(id);
+        orders.pledge(id, GOAL / 2);
         vm.warp(deadline + 1);
 
         vm.prank(contributor1);
