@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useReadContract } from "wagmi";
 import { Login } from "@/components/Login";
 import { BuyerPanel } from "@/components/BuyerPanel";
 import { BodegaOwnerPanel } from "@/components/BodegaOwnerPanel";
+import { InstallAppBanner } from "@/components/pwa/InstallAppBanner";
 import { paymentRouterAbi, paymentRouterAddress } from "@/lib/contracts";
 import { sendAndWait, useSmartAccountClient } from "@/lib/smartAccount";
 
@@ -22,6 +23,45 @@ function roleStorageKey(address: string) {
 }
 
 /**
+ * La elección "Soy cliente" vive en localStorage (por dirección) y se lee con
+ * useSyncExternalStore, sin copiarla a un estado con un efecto. Si el navegador no deja usar
+ * localStorage (modo privado, almacenamiento bloqueado), queda en memoria para esta sesión.
+ */
+const roleListeners = new Set<() => void>();
+const memoryRoles = new Set<string>();
+
+function subscribeRole(onChange: () => void) {
+  roleListeners.add(onChange);
+  window.addEventListener("storage", onChange);
+  return () => {
+    roleListeners.delete(onChange);
+    window.removeEventListener("storage", onChange);
+  };
+}
+
+function readStoredRole(address: string | null): "cliente" | null {
+  if (!address) return null;
+  const key = roleStorageKey(address);
+  try {
+    if (window.localStorage.getItem(key) === "cliente") return "cliente";
+  } catch {
+    // Sin acceso a localStorage: solo cuenta lo que se eligió en esta sesión.
+  }
+  return memoryRoles.has(key) ? "cliente" : null;
+}
+
+function storeClienteRole(address: string) {
+  const key = roleStorageKey(address);
+  memoryRoles.add(key);
+  try {
+    window.localStorage.setItem(key, "cliente");
+  } catch {
+    // Queda solo en memoria.
+  }
+  roleListeners.forEach((notify) => notify());
+}
+
+/**
  * Bodeguero y cliente son dos espacios separados, nunca combinados en la misma pantalla:
  * una cuenta ya registrada como bodega (`isBodega` on-chain) va directo a su panel, sin
  * opción de ver la vista de cliente. Una cuenta nueva elige explícitamente una vez
@@ -32,7 +72,6 @@ export default function AppHome() {
   const { client: smartAccountClient, address, isLoading: isAccountLoading } = useSmartAccountClient();
   const [isRegistering, setIsRegistering] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
-  const [chosenRole, setChosenRole] = useState<"cliente" | null>(null);
 
   const isBodegaQuery = useReadContract({
     address: paymentRouterAddress,
@@ -43,15 +82,11 @@ export default function AppHome() {
   });
 
   const isBodega = isBodegaQuery.data === true;
-
-  useEffect(() => {
-    if (!address) {
-      setChosenRole(null);
-      return;
-    }
-    const stored = window.localStorage.getItem(roleStorageKey(address));
-    setChosenRole(stored === "cliente" ? "cliente" : null);
-  }, [address]);
+  const chosenRole = useSyncExternalStore(
+    subscribeRole,
+    () => readStoredRole(address),
+    () => null,
+  );
 
   async function handleRegisterBodega() {
     if (!smartAccountClient || !address || !paymentRouterAddress) return;
@@ -75,8 +110,7 @@ export default function AppHome() {
 
   function chooseCliente() {
     if (!address) return;
-    window.localStorage.setItem(roleStorageKey(address), "cliente");
-    setChosenRole("cliente");
+    storeClienteRole(address);
   }
 
   const isReady = Boolean(address) && isAccountLoading === false && !isBodegaQuery.isLoading;
@@ -101,6 +135,8 @@ export default function AppHome() {
           </div>
           {address && <Login />}
         </header>
+
+        {address && <InstallAppBanner />}
 
         {!address && (
           <div className="space-y-4">

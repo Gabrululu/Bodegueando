@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#fafaf7" />
+    <title>Sin conexión · Bodegueando</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        box-sizing: border-box;
+        background: #fafaf7;
+        color: #0a0a0b;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        text-align: center;
+      }
+      main { max-width: 360px; }
+      img { width: 64px; height: 64px; }
+      h1 { font-size: 20px; margin: 16px 0 8px; }
+      p { color: #55564f; line-height: 1.5; margin: 0 0 20px; }
+      button {
+        cursor: pointer;
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #0a0a0b;
+        background: linear-gradient(180deg, #d6f17b 0%, #c9e265 100%);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/icons/icon-192.png" alt="" />
+      <h1>No hay conexión a internet</h1>
+      <p>Para cobrar, pagar o ver tu fiado, Bodegueando necesita internet. Revisa tus datos o el wifi y vuelve a intentarlo.</p>
+      <button onclick="location.reload()">Reintentar</button>
+    </main>
+  </body>
+</html>

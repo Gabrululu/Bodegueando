@@ -18,6 +18,7 @@ import {
   sectionTitleClass,
   statValueClass,
 } from "@/lib/bodega/ui";
+import { signAccountAction } from "@/lib/accountActionMessage";
 import { sendAndWait } from "@/lib/smartAccount";
 import { withStablecoinApproval } from "@/lib/stablecoin";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -26,7 +27,7 @@ import type { TabProps } from "./types";
 const MAX_SCORE = 1000;
 
 /** Crédito: tu nivel de confianza explicado, el recálculo con IA, el certificado y la línea de crédito. */
-export function CreditoTab({ address, client }: TabProps) {
+export function CreditoTab({ address, client, signAsOwner }: TabProps) {
   const core = useBodegaCore(address);
   const { loans, refetch: refetchLoans } = useMyLoans(address);
   const { formatSolesFromUsd, solesToUsd, formatStablecoin, solesToStablecoin } = useExchangeRate();
@@ -82,16 +83,24 @@ export function CreditoTab({ address, client }: TabProps) {
   const myTierCollateralBps = tiers.find((t) => certifiedThreshold >= t.minThreshold)?.collateralBps ?? null;
 
   async function handleAskAi() {
+    if (!signAsOwner) return;
     setIsAiLoading(true);
     setAiError(null);
     setAiResult(null);
     try {
+      // Cada recálculo cuesta una consulta a la IA y una transacción: la ruta exige la firma de
+      // la dueña y limita cuántos se piden por día.
+      const { issuedAt, signature } = await signAccountAction(signAsOwner, "fiado-score", address);
       const res = await fetch("/api/fiado-score", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bodegaAddress: address }),
+        body: JSON.stringify({ bodegaAddress: address, issuedAt, signature }),
       });
       const data = await res.json().catch(() => ({}));
+      if (data.reason === "rate_limited") {
+        setAiError("Ya revisaste tu límite varias veces hoy. Vuelve a intentarlo mañana.");
+        return;
+      }
       if (data.reason === "onchain_rejected") {
         setAiError("La IA propuso un límite mayor al que permite tu historial, así que no se aplicó. Sigue cobrando y vuelve a intentarlo más adelante.");
         return;
@@ -236,7 +245,7 @@ export function CreditoTab({ address, client }: TabProps) {
             <li>Que tus clientes te paguen el fiado a tiempo.</li>
           </ul>
         </div>
-        <button onClick={handleAskAi} disabled={isAiLoading} className={outlineButtonClass}>
+        <button onClick={handleAskAi} disabled={isAiLoading || !signAsOwner} className={outlineButtonClass}>
           {isAiLoading ? "Calculando..." : "Revisar mi límite con IA"}
         </button>
         {aiError && <p className="text-xs text-red-500">{aiError}</p>}

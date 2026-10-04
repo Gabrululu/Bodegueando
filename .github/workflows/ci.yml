@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (types, tests, lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          # La versión de pnpm está en frontend/package.json (packageManager), no en la raíz.
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Genera los tipos de rutas de Next (LayoutProps, PageProps…) que usa el chequeo de tipos.
+      - run: npx next typegen
+      - run: npx tsc --noEmit
+      - run: pnpm test
+      - run: pnpm lint
+
+  solidity:
+    name: Solidity (forge test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/solidity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      # contracts/solidity/lib/ no se versiona: mismas versiones que en ARCHITECTURE.md (Setup).
+      - name: Install Foundry libraries
+        run: |
+          forge install foundry-rs/forge-std@v1.9.7 --no-git
+          forge install OpenZeppelin/openzeppelin-contracts@v5.1.0 --no-git
+          forge install eth-infinitism/account-abstraction@v0.7.0 --no-git
+      # Sin ARBITRUM_SEPOLIA_RPC_URL, PaymentRouterForkTest se salta solo.
+      - run: forge test
+
+  stylus:
+    name: Stylus (cargo test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/stylus-fiado-scoring
+    steps:
+      - uses: actions/checkout@v4
+      # rustup lee rust-toolchain.toml (1.91.0 + wasm32) y lo instala en el primer cargo.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/stylus-fiado-scoring
+      - run: cargo test

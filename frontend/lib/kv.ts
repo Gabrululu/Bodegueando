@@ -91,10 +91,16 @@ function writeKvFile(data: Record<string, string>): void {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
-/** Reserva `key` con `value` solo si nadie la tenía todavía. Devuelve si la reserva fue tuya. */
-export async function setIfNotExists(key: string, value: string): Promise<boolean> {
+/**
+ * Reserva `key` con `value` solo si nadie la tenía todavía. Devuelve si la reserva fue tuya.
+ * Con `ttlSeconds`, Redis la borra sola al vencer (para claves de rate limit, que si no se
+ * acumulan para siempre); el fallback de archivo ignora el TTL — es solo para desarrollo.
+ */
+export async function setIfNotExists(key: string, value: string, ttlSeconds?: number): Promise<boolean> {
   if (redis) {
-    const result = await redis.set(key, value, { nx: true });
+    const result = ttlSeconds
+      ? await redis.set(key, value, { nx: true, ex: ttlSeconds })
+      : await redis.set(key, value, { nx: true });
     return result === "OK";
   }
   return withFileMutex(() => {
@@ -111,6 +117,23 @@ export async function getValue(key: string): Promise<string | null> {
   return withFileMutex(() => {
     const data = readKvFile();
     return data[key] ?? null;
+  });
+}
+
+/**
+ * Lee `key` y la borra en la misma operación (GETDEL en Redis): para valores de un solo uso,
+ * donde dos lecturas concurrentes no pueden quedarse ambas con el mismo valor.
+ */
+export async function takeValue(key: string): Promise<string | null> {
+  if (redis) return redis.getdel<string>(key);
+  return withFileMutex(() => {
+    const data = readKvFile();
+    const value = data[key] ?? null;
+    if (value !== null) {
+      delete data[key];
+      writeKvFile(data);
+    }
+    return value;
   });
 }
 
@@ -153,9 +176,17 @@ export async function deleteKey(key: string): Promise<void> {
   });
 }
 
-/** Incrementa `key` en 1 (atómico) y devuelve el nuevo valor. Arranca en 0 si no existía. */
-export async function incrementCounter(key: string): Promise<number> {
-  if (redis) return redis.incr(key);
+/**
+ * Incrementa `key` en 1 (atómico) y devuelve el nuevo valor. Arranca en 0 si no existía.
+ * Con `ttlSeconds`, Redis la borra sola al vencer (contadores de rate limit); el fallback de
+ * archivo ignora el TTL, igual que setIfNotExists.
+ */
+export async function incrementCounter(key: string, ttlSeconds?: number): Promise<number> {
+  if (redis) {
+    if (!ttlSeconds) return redis.incr(key);
+    const [count] = await redis.multi().incr(key).expire(key, ttlSeconds, "NX").exec<[number, number]>();
+    return count;
+  }
   return withFileMutex(() => {
     const data = readKvFile();
     const next = (Number(data[key]) || 0) + 1;

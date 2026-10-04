@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { BaseError, ContractFunctionRevertedError, createPublicClient, createWalletClient, http, isAddress, type Address } from "viem";
+import { BaseError, ContractFunctionRevertedError, createPublicClient, createWalletClient, http, isAddress, isHex, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrumSepolia } from "viem/chains";
 import { fiadoScoringAbi, fiadoScoringAddress } from "@/lib/contracts";
+import { accountActionMessage } from "@/lib/accountActionMessage";
+import { verifyBodegaOwner } from "@/lib/ownerAuth";
+import { hitRateLimit } from "@/lib/rateLimit";
 
 /**
  * Reads a bodega's on-chain payment history from the FiadoScoring (Stylus) contract,
@@ -15,7 +18,14 @@ import { fiadoScoringAbi, fiadoScoringAddress } from "@/lib/contracts";
  * authorized as the FiadoScoring ai_oracle — a server-held key is a hackathon-speed
  * shortcut vs. a proper signer service, documented in the README), and
  * NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL / NEXT_PUBLIC_FIADO_SCORING_ADDRESS.
+ *
+ * Each call costs a Claude request and an oracle transaction, so it requires the bodega owner's
+ * signature (lib/ownerAuth.ts) and is rate limited: a few recalculations per bodega per day, plus
+ * a global daily cap (FIADO_SCORE_DAILY_LIMIT) that bounds the total cost even across many bodegas.
  */
+const PER_BODEGA_DAILY_LIMIT = 3;
+const GLOBAL_DAILY_LIMIT = Number(process.env.FIADO_SCORE_DAILY_LIMIT) || 200;
+const DAY_SECONDS = 24 * 60 * 60;
 
 const rpcUrl = process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL ?? arbitrumSepolia.rpcUrls.default.http[0];
 
@@ -65,6 +75,28 @@ export async function POST(request: NextRequest) {
 
   if (typeof bodegaAddress !== "string" || !isAddress(bodegaAddress)) {
     return NextResponse.json({ error: "bodegaAddress must be a valid address" }, { status: 400 });
+  }
+  const signature = body?.signature;
+  const issuedAt = Number(body?.issuedAt);
+  if (typeof signature !== "string" || !isHex(signature)) {
+    return NextResponse.json({ error: "signature is required" }, { status: 400 });
+  }
+
+  const auth = await verifyBodegaOwner({
+    bodega: bodegaAddress as Address,
+    message: accountActionMessage("fiado-score", bodegaAddress, issuedAt),
+    signature: signature as Hex,
+    issuedAt,
+  });
+  if (!auth.ok) {
+    return NextResponse.json({ error: "Could not verify the bodega owner", reason: auth.reason }, { status: auth.status });
+  }
+
+  if (await hitRateLimit(`fiado-score:${bodegaAddress.toLowerCase()}`, PER_BODEGA_DAILY_LIMIT, DAY_SECONDS)) {
+    return NextResponse.json({ error: "Too many recalculations for this bodega today", reason: "rate_limited" }, { status: 429 });
+  }
+  if (await hitRateLimit("fiado-score:global", GLOBAL_DAILY_LIMIT, DAY_SECONDS)) {
+    return NextResponse.json({ error: "Daily recalculation budget reached", reason: "rate_limited" }, { status: 429 });
   }
 
   if (!fiadoScoringAddress) {

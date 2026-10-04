@@ -26,7 +26,7 @@ import { DebtorsList } from "./DebtorsList";
 import type { TabProps } from "./types";
 
 /** Fiado: prenderlo/apagarlo, cuánto ya fiaste, quién te debe, fiar a un cliente y fiado con garantía. */
-export function FiadoTab({ address, client, navigate }: TabProps) {
+export function FiadoTab({ address, client, navigate, signAsOwner }: TabProps) {
   const core = useBodegaCore(address);
   const { invoices, refetch: refetchInvoices } = useMyInvoices(address);
   const { formatSolesFromUsd, solesToUsd, formatStablecoin, solesToStablecoin } = useExchangeRate();
@@ -236,7 +236,7 @@ export function FiadoTab({ address, client, navigate }: TabProps) {
         )}
       </section>
 
-      {core.fiadoEnabled && <DebtorsList address={address} />}
+      {core.fiadoEnabled && <DebtorsList address={address} signAsOwner={signAsOwner} />}
 
       {core.fiadoEnabled && (
         <section id="fiar" className={cardClass}>

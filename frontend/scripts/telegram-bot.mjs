@@ -46,7 +46,13 @@ async function handleVincular(chatId, code) {
   try {
     const res = await fetch(`${APP_BASE_URL}/api/telegram/consume-code`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // consume-code exige el mismo secreto que el webhook cuando está configurado.
+        ...(process.env.TELEGRAM_WEBHOOK_SECRET && {
+          "X-Telegram-Bot-Api-Secret-Token": process.env.TELEGRAM_WEBHOOK_SECRET,
+        }),
+      },
       body: JSON.stringify({ code, chatId }),
     });
     const data = await res.json();

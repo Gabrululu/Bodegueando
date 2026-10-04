@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import type { Address } from "viem";
+import { signAccountAction } from "@/lib/accountActionMessage";
 import { useDebtors } from "@/lib/bodega/activity";
 import { cardClass, mutedTextClass, outlineButtonClass, relativeDays, sectionTitleClass } from "@/lib/bodega/ui";
 import { useExchangeRate } from "@/lib/useExchangeRate";
+import type { TabProps } from "./types";
 
 const REMIND_RESULT: Record<string, string> = {
   sent: "Recordatorio enviado por Telegram ✓",
@@ -18,7 +20,7 @@ const REMIND_RESULT: Record<string, string> = {
  * (FiadoExtended/FiadoRepaid) con la deuda actual leída del contrato. Cada cliente se muestra por
  * su código de 6 dígitos — el mismo con el que la bodega le fió —, nunca por su dirección.
  */
-export function DebtorsList({ address }: { address: Address }) {
+export function DebtorsList({ address, signAsOwner }: { address: Address; signAsOwner: TabProps["signAsOwner"] }) {
   const debtors = useDebtors(address);
   const { formatSolesFromUsd } = useExchangeRate();
   const [codes, setCodes] = useState<Record<string, string>>({});
@@ -46,13 +48,16 @@ export function DebtorsList({ address }: { address: Address }) {
   }, [customers.join(",")]);
 
   async function handleRemind(customer: Address) {
+    if (!signAsOwner) return;
     const key = customer.toLowerCase();
     setRemindingKey(key);
     try {
+      // Solo la dueña puede mandar el recordatorio: firma para este cliente en particular.
+      const { issuedAt, signature } = await signAccountAction(signAsOwner, "fiado-remind", address, { cliente: key });
       const res = await fetch("/api/fiado/remind", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bodega: address, customer }),
+        body: JSON.stringify({ bodega: address, customer, issuedAt, signature }),
       });
       const data = await res.json();
       const outcome = data.sent ? "sent" : (data.reason as string);
@@ -96,7 +101,7 @@ export function DebtorsList({ address }: { address: Address }) {
                 </div>
                 <button
                   onClick={() => handleRemind(d.customer)}
-                  disabled={remindingKey === key}
+                  disabled={remindingKey === key || !signAsOwner}
                   className={`${outlineButtonClass} min-h-9 self-start py-1 text-xs`}
                 >
                   {remindingKey === key ? "Enviando..." : "Recordarle por Telegram"}

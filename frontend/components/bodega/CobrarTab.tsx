@@ -24,7 +24,7 @@ const RANGES = [
 const PAGE_SIZE = 20;
 
 /** Cobrar: el QR para el mostrador, el historial completo de ventas y los avisos por Telegram. */
-export function CobrarTab({ address }: TabProps) {
+export function CobrarTab({ address, signAsOwner }: TabProps) {
   const bodegaCode = useBodegaCode(address);
   const sales = useSalesHistory(address);
   const { formatSolesFromUsd, usdPen } = useExchangeRate();
@@ -144,7 +144,7 @@ export function CobrarTab({ address }: TabProps) {
         )}
       </section>
 
-      <TelegramCard address={address} />
+      <TelegramCard address={address} signAsOwner={signAsOwner} />
     </div>
   );
 }

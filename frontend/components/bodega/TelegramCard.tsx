@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import type { Address } from "viem";
+import { signAccountAction } from "@/lib/accountActionMessage";
 import { useTelegramLinked } from "@/lib/bodega/hooks";
 import { cardClass, outlineButtonClass, primaryButtonClass, primaryButtonStyle, sectionTitleClass } from "@/lib/bodega/ui";
+import type { TabProps } from "./types";
 
 const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME;
 
 /** Vincular la bodega con el bot de Telegram (avisos de pago y /perfil). */
-export function TelegramCard({ address }: { address: Address }) {
+export function TelegramCard({ address, signAsOwner }: { address: Address; signAsOwner: TabProps["signAsOwner"] }) {
   const { linked, refresh } = useTelegramLinked(address);
   const [linkCode, setLinkCode] = useState<string | null>(null);
   const [isGeneratingCode, setIsGeneratingCode] = useState(false);
@@ -18,15 +20,19 @@ export function TelegramCard({ address }: { address: Address }) {
   if (!TELEGRAM_BOT_USERNAME) return null;
 
   async function handleGenerateCode() {
+    if (!signAsOwner) return;
     setIsGeneratingCode(true);
     setMessage(null);
     try {
+      // Quien vincula un chat recibe los avisos de pago de esta cuenta: la ruta exige la firma.
+      const { issuedAt, signature } = await signAccountAction(signAsOwner, "telegram-link", address);
       const res = await fetch("/api/telegram/generate-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address }),
+        body: JSON.stringify({ address, issuedAt, signature }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
       setLinkCode(data.code ?? null);
     } catch {
       setMessage("No pudimos generar el código. Intenta de nuevo.");
@@ -90,7 +96,7 @@ export function TelegramCard({ address }: { address: Address }) {
             escribiéndole /perfil al bot, cuando quieras.
           </p>
           {!linkCode ? (
-            <button onClick={handleGenerateCode} disabled={isGeneratingCode} className={primaryButtonClass} style={primaryButtonStyle}>
+            <button onClick={handleGenerateCode} disabled={isGeneratingCode || !signAsOwner} className={primaryButtonClass} style={primaryButtonStyle}>
               {isGeneratingCode ? "Generando..." : "1. Generar mi código"}
             </button>
           ) : (

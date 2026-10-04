@@ -75,3 +75,29 @@ export async function signAttestation(bodega: bigint, score: bigint, issuedAt: b
     oracleAy: F.toObject(pubKey[1]).toString(),
   };
 }
+
+/**
+ * Checks that an attestation was really signed by this oracle (same check the circuit does), so
+ * /api/credit-certificate/prove can reject made-up inputs before spending CPU on a proof.
+ */
+export async function verifyAttestation(bodega: bigint, attestation: Attestation): Promise<boolean> {
+  const eddsa = await getEddsa();
+  const poseidon = await getPoseidon();
+  const F = poseidon.F;
+
+  const pubKey = eddsa.prv2pub(privateKeyBuffer());
+  if (
+    attestation.oracleAx !== F.toObject(pubKey[0]).toString() ||
+    attestation.oracleAy !== F.toObject(pubKey[1]).toString()
+  ) {
+    return false;
+  }
+
+  try {
+    const msg = poseidon([bodega, BigInt(attestation.score), BigInt(attestation.issuedAt)]);
+    const signature = { R8: [F.e(BigInt(attestation.R8x)), F.e(BigInt(attestation.R8y))], S: BigInt(attestation.S) };
+    return eddsa.verifyPoseidon(msg, signature, pubKey);
+  } catch {
+    return false;
+  }
+}

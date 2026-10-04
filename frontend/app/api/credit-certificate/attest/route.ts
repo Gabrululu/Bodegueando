@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http, isAddress, type Address } from "viem";
 import { arbitrumSepolia } from "viem/chains";
 import { fiadoScoringAbi, fiadoScoringAddress, creditLineAbi, creditLineAddress } from "@/lib/contracts";
+import { clientIp, hitRateLimit } from "@/lib/rateLimit";
 import { signAttestation, getOraclePubKey } from "@/lib/zkOracle";
 
 /**
@@ -14,7 +15,13 @@ import { signAttestation, getOraclePubKey } from "@/lib/zkOracle";
  * Refuses to sign while the bodega has an unresolved default on CreditLine — the
  * reputational consequence of a liquidated loan lives here, not on-chain (see
  * CreditLine.sol's doc comment for why).
+ *
+ * Rate limited per IP: each attestation can be turned into one proof at /prove, the expensive
+ * step. Not per bodega — the score is public, so anyone may attest any bodega, and a per-bodega
+ * limit would let a stranger use up a bodega's quota.
  */
+const PER_IP_HOURLY_LIMIT = 10;
+const HOUR_SECONDS = 60 * 60;
 const rpcUrl = process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL ?? arbitrumSepolia.rpcUrls.default.http[0];
 const publicClient = createPublicClient({ chain: arbitrumSepolia, transport: http(rpcUrl) });
 
@@ -31,6 +38,9 @@ export async function POST(request: NextRequest) {
   }
   if (!fiadoScoringAddress || !process.env.ZK_ORACLE_PRIVATE_KEY) {
     return NextResponse.json({ error: "credit-certificate service not configured" }, { status: 503 });
+  }
+  if (await hitRateLimit(`zk-attest:ip:${clientIp(request)}`, PER_IP_HOURLY_LIMIT, HOUR_SECONDS)) {
+    return NextResponse.json({ error: "too many requests, try again later", reason: "rate_limited" }, { status: 429 });
   }
 
   if (creditLineAddress) {

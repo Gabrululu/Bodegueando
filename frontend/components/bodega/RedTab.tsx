@@ -27,6 +27,7 @@ import {
   sectionTitleClass,
   textInputClass,
 } from "@/lib/bodega/ui";
+import { signAccountAction } from "@/lib/accountActionMessage";
 import { sendAndWait } from "@/lib/smartAccount";
 import { formatPuntos, withStablecoinApproval } from "@/lib/stablecoin";
 import { useExchangeRate } from "@/lib/useExchangeRate";
@@ -43,7 +44,7 @@ export function RedTab(props: TabProps) {
     <div className="flex flex-col gap-6">
       <GroupOrdersSection {...props} locations={locations} />
       <RewardsSection {...props} />
-      <LocationSection address={address} locations={locations} />
+      <LocationSection address={address} locations={locations} signAsOwner={props.signAsOwner} />
       <BeneficioAdminSection {...props} />
     </div>
   );
@@ -51,7 +52,15 @@ export function RedTab(props: TabProps) {
 
 type Locations = ReturnType<typeof useBodegaLocations>;
 
-function LocationSection({ address, locations }: { address: Address; locations: Locations }) {
+function LocationSection({
+  address,
+  locations,
+  signAsOwner,
+}: {
+  address: Address;
+  locations: Locations;
+  signAsOwner: TabProps["signAsOwner"];
+}) {
   const { myLocation, setMyLocation, setSavedLocation } = locations;
   const [isLocating, setIsLocating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -78,15 +87,18 @@ function LocationSection({ address, locations }: { address: Address; locations: 
   }
 
   async function handleSave() {
-    if (!myLocation) return;
+    if (!myLocation || !signAsOwner) return;
     setIsSaving(true);
     setError(null);
     setSaved(false);
     try {
+      const { lat, lng } = myLocation;
+      // La ruta solo guarda coordenadas firmadas por la dueña de la bodega.
+      const { issuedAt, signature } = await signAccountAction(signAsOwner, "bodega-location", address, { lat, lng });
       const res = await fetch("/api/bodega/location", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address, lat: myLocation.lat, lng: myLocation.lng }),
+        body: JSON.stringify({ address, lat, lng, issuedAt, signature }),
       });
       if (!res.ok) throw new Error("failed");
       setSaved(true);
@@ -127,7 +139,7 @@ function LocationSection({ address, locations }: { address: Address; locations: 
         <button onClick={handleLocateMe} disabled={isLocating} className={outlineButtonClass}>
           {isLocating ? "Ubicando..." : "Usar mi ubicación actual"}
         </button>
-        <button onClick={handleSave} disabled={isSaving || !myLocation} className={primaryButtonClass} style={primaryButtonStyle}>
+        <button onClick={handleSave} disabled={isSaving || !myLocation || !signAsOwner} className={primaryButtonClass} style={primaryButtonStyle}>
           {isSaving ? "Guardando..." : "Guardar ubicación"}
         </button>
       </div>

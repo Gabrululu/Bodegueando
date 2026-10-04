@@ -24,6 +24,7 @@ import {
 } from "@/lib/contracts";
 import { confianzaLabel } from "@/lib/fiado";
 import { useExchangeRate } from "@/lib/useExchangeRate";
+import { signAccountAction } from "@/lib/accountActionMessage";
 import { sendAndWait, useSmartAccountClient } from "@/lib/smartAccount";
 import { formatPuntos, withStablecoinApproval } from "@/lib/stablecoin";
 
@@ -51,7 +52,7 @@ const highlightBoxClass = "flex flex-col gap-3 rounded-xl border border-black/5 
  * son del bodeguero.
  */
 export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
-  const { client: smartAccountClient, address, isLoading: isAccountLoading } = useSmartAccountClient();
+  const { client: smartAccountClient, address, isLoading: isAccountLoading, signAsOwner } = useSmartAccountClient();
   const isConnected = Boolean(address);
   const [bodegaCodeInput, setBodegaCodeInput] = useState(initialCode ?? "");
   const [bodegaAddress, setBodegaAddress] = useState<Address | undefined>(undefined);
@@ -69,11 +70,14 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
 
   const { formatSolesFromUsd, usdPen, formatStablecoin, solesToStablecoin } = useExchangeRate();
   const [myCode, setMyCode] = useState<string | null>(null);
-  const [repayAmountSoles, setRepayAmountSoles] = useState("");
+  // Lo que escribió el cliente, o null si no tocó el campo: entonces se muestra la deuda completa
+  // (calculada en el render, así sigue a la deuda si cambia, sin un efecto que copie estado).
+  const [repayAmountInput, setRepayAmountInput] = useState<string | null>(null);
   const [isRepaySubmitting, setIsRepaySubmitting] = useState(false);
   const [repayError, setRepayError] = useState<string | null>(null);
   const [isRepayConfirmed, setIsRepayConfirmed] = useState(false);
-  const [benefitAmountSoles, setBenefitAmountSoles] = useState("");
+  // Igual que repayAmountInput: null = sin editar, se muestra el saldo completo del beneficio.
+  const [benefitAmountInput, setBenefitAmountInput] = useState<string | null>(null);
   const [isRedeemSubmitting, setIsRedeemSubmitting] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [isRedeemConfirmed, setIsRedeemConfirmed] = useState(false);
@@ -218,12 +222,9 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   });
   const debtWei = (debtQuery.data as bigint | undefined) ?? BigInt(0);
 
-  useEffect(() => {
-    if (debtWei > BigInt(0) && repayAmountSoles === "") {
-      // La deuda de fiado está en USD con 18 decimales (ver PaymentRouter.sol).
-      setRepayAmountSoles(((Number(debtWei) / 1e18) * usdPen).toFixed(2));
-    }
-  }, [debtWei, usdPen, repayAmountSoles]);
+  // La deuda de fiado está en USD con 18 decimales (ver PaymentRouter.sol).
+  const repayAmountSoles =
+    repayAmountInput ?? (debtWei > BigInt(0) ? ((Number(debtWei) / 1e18) * usdPen).toFixed(2) : "");
 
   const stablecoinBalanceQuery = useReadContract({
     address: stablecoinAddress,
@@ -255,11 +256,8 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   // simplemente revierte y se muestra el mismo mensaje de error genérico de abajo.
   const hasBenefit = benefitBalanceWei > BigInt(0);
 
-  useEffect(() => {
-    if (hasBenefit && bodegaAddress && benefitAmountSoles === "") {
-      setBenefitAmountSoles((Number(benefitBalanceWei) / 1e18).toFixed(2));
-    }
-  }, [hasBenefit, bodegaAddress, benefitBalanceWei, benefitAmountSoles]);
+  const benefitAmountSoles =
+    benefitAmountInput ?? (hasBenefit && bodegaAddress ? (Number(benefitBalanceWei) / 1e18).toFixed(2) : "");
 
   async function handleRedeemBenefit() {
     if (!bodegaAddress || !beneficioTokenAddress || !smartAccountClient || !address) return;
@@ -277,7 +275,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
         },
       ]);
       setIsRedeemConfirmed(true);
-      setBenefitAmountSoles("");
+      setBenefitAmountInput(null);
       benefitBalanceQuery.refetch();
     } catch {
       setRedeemError("No se pudo pagar con tu beneficio. Revisa el monto e intenta de nuevo.");
@@ -632,7 +630,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
       const amount = solesToStablecoin(repayAmountSoles);
       await sendAndWait(smartAccountClient, address, stablecoinPaymentCalls("payFiado", bodegaAddress, amount));
       setIsRepayConfirmed(true);
-      setRepayAmountSoles("");
+      setRepayAmountInput(null);
       debtQuery.refetch();
       stablecoinBalanceQuery.refetch();
     } catch {
@@ -733,16 +731,19 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
   }, [address]);
 
   async function handleGenerateCode() {
-    if (!address) return;
+    if (!address || !signAsOwner) return;
     setIsGeneratingCode(true);
     setTelegramMessage(null);
     try {
+      // Quien vincula un chat recibe los avisos de pago de esta cuenta: la ruta exige la firma.
+      const { issuedAt, signature } = await signAccountAction(signAsOwner, "telegram-link", address);
       const res = await fetch("/api/telegram/generate-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address }),
+        body: JSON.stringify({ address, issuedAt, signature }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
       setLinkCode(data.code ?? null);
     } catch {
       setTelegramMessage("No pudimos generar el código. Intenta de nuevo.");
@@ -876,7 +877,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
                   min="0"
                   step="0.5"
                   value={repayAmountSoles}
-                  onChange={(e) => setRepayAmountSoles(e.target.value)}
+                  onChange={(e) => setRepayAmountInput(e.target.value)}
                   className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                 />
               </div>
@@ -920,7 +921,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
                   min="0"
                   step="0.5"
                   value={benefitAmountSoles}
-                  onChange={(e) => setBenefitAmountSoles(e.target.value)}
+                  onChange={(e) => setBenefitAmountInput(e.target.value)}
                   className="w-full rounded-xl border border-black/15 bg-white px-3 py-2 text-base text-[#0a0a0b] outline-none focus:border-black/35"
                 />
               </div>
@@ -1180,7 +1181,7 @@ export function BuyerPanel({ initialCode }: { initialCode?: string } = {}) {
                 Vincula tu cuenta con Telegram para consultar tus puntos escribiéndole /perfil al bot.
               </p>
               {!linkCode ? (
-                <button onClick={handleGenerateCode} disabled={isGeneratingCode} className={primaryButtonClass} style={primaryButtonStyle}>
+                <button onClick={handleGenerateCode} disabled={isGeneratingCode || !signAsOwner} className={primaryButtonClass} style={primaryButtonStyle}>
                   {isGeneratingCode ? "Generando..." : "1. Generar mi código"}
                 </button>
               ) : (
