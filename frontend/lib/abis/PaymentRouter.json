@@ -354,6 +354,11 @@
     },
     {
       "type": "error",
+      "name": "AlreadyRegistered",
+      "inputs": []
+    },
+    {
+      "type": "error",
       "name": "CashbackTooHigh",
       "inputs": []
     },

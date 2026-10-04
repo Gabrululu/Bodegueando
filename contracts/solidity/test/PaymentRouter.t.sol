@@ -139,6 +139,24 @@ contract PaymentRouterTest is Test {
         assertEq(token.balanceOf(newBodega), router.BODEGA_BOOTSTRAP_PUNTOS());
     }
 
+    function test_RevertWhen_RegisterSelfTwice_NoRepeatedBootstrapMint() public {
+        address newBodega = makeAddr("newBodega");
+        vm.prank(newBodega);
+        router.registerSelf();
+
+        vm.prank(newBodega);
+        vm.expectRevert(PaymentRouter.AlreadyRegistered.selector);
+        router.registerSelf();
+
+        assertEq(token.balanceOf(newBodega), router.BODEGA_BOOTSTRAP_PUNTOS(), "bootstrap minted only once");
+    }
+
+    function test_RevertWhen_OwnerRegistersExistingBodega() public {
+        vm.prank(owner);
+        vm.expectRevert(PaymentRouter.AlreadyRegistered.selector);
+        router.registerBodega(bodega);
+    }
+
     function test_RegisterBodega_MintsBootstrapPuntos() public view {
         // `bodega` was registered by the owner in setUp() — assert the bootstrap landed there too.
         assertEq(token.balanceOf(bodega), router.BODEGA_BOOTSTRAP_PUNTOS());

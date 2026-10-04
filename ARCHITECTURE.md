@@ -42,23 +42,26 @@ bodegueando/
 |---|---|---|
 | **FiadoScoring** (Stylus/Rust) | `0x22FD7ED957b356dcF4a93574D24fC724736480B2` | [view / verified](https://sepolia.arbiscan.io/address/0x22FD7ED957b356dcF4a93574D24fC724736480B2) |
 | **PuntosToken** | `0x2bd8AbEB2F5598f8477560C70c742aFfc22912de` | [view verified code](https://sepolia.arbiscan.io/address/0x2bd8AbEB2F5598f8477560C70c742aFfc22912de#code) |
-| **PaymentRouter** (USDG) | `0xe25Ee43a2A7Ba1F582603E47DE1717E36EF57329` | [view verified code](https://sepolia.arbiscan.io/address/0xe25Ee43a2A7Ba1F582603E47DE1717E36EF57329#code) |
-| **PuntosPaymaster** | `0x857836be11e433559cBea32120324B232Dddc87F` | [view verified code](https://sepolia.arbiscan.io/address/0x857836be11e433559cBea32120324B232Dddc87F#code) |
+| **PaymentRouter** (USDG) | `0x3E774Bb89AD93aAEE1ddd3d6cEeE609B712b655b` | [view verified code](https://sepolia.arbiscan.io/address/0x3E774Bb89AD93aAEE1ddd3d6cEeE609B712b655b#code) |
+| **PuntosPaymaster** | `0x493D8B20f12E94cf513b9F078E41FFDF1E685B86` | [view verified code](https://sepolia.arbiscan.io/address/0x493D8B20f12E94cf513b9F078E41FFDF1E685B86#code) |
 | **BeneficioToken** (social programs PoC) | `0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc` | [view verified code](https://sepolia.arbiscan.io/address/0x1ffbE40Ea1B050B1429cDE507a1A970e1AedF8Bc#code) |
-| **InvoiceEscrow** (fiado with partial collateral, USDG) | `0xAEF227E192B2EFbb85D8CAD5C6E5dd3c38513F72` | [view verified code](https://sepolia.arbiscan.io/address/0xAEF227E192B2EFbb85D8CAD5C6E5dd3c38513F72#code) |
+| **InvoiceEscrow** (fiado with partial collateral, USDG) | `0xa6CCbB44F50a8a494C621B1b5aE922ABef1A0c96` | [view verified code](https://sepolia.arbiscan.io/address/0xa6CCbB44F50a8a494C621B1b5aE922ABef1A0c96#code) |
 | **RewardsCatalog** (rewards catalog) | `0x0c07b1b63aAbAD36d15877D80f10411534C44a2f` | [view verified code](https://sepolia.arbiscan.io/address/0x0c07b1b63aAbAD36d15877D80f10411534C44a2f#code) |
-| **GroupOrders** (joint purchases between bodegas, USDG) | `0x20Ec045bdc3C1a371b0a5B94d136c1d58C0160DF` | [view verified code](https://sepolia.arbiscan.io/address/0x20Ec045bdc3C1a371b0a5B94d136c1d58C0160DF#code) |
+| **GroupOrders** (joint purchases between bodegas, USDG) | `0x5223dA615bB75E766841B01b949F5e5bB8869E5F` | [view verified code](https://sepolia.arbiscan.io/address/0x5223dA615bB75E766841B01b949F5e5bB8869E5F#code) |
 | **CreditCertificate** | `0xc42547586FbEfCA3D8EA189B1e87a2c234f67828` | [view verified code](https://sepolia.arbiscan.io/address/0xc42547586FbEfCA3D8EA189B1e87a2c234f67828#code) |
 | **Groth16Verifier** (ZK verifier, auto-generated) | `0x6a61e780f9a811eA28718146A9B2F720C19359fb` | [view verified code](https://sepolia.arbiscan.io/address/0x6a61e780f9a811eA28718146A9B2F720C19359fb#code) |
-| **CreditLine** (USDG) | `0x126409a7DD1CF34004E1A1BFd416eb666Cd0351F` | [view verified code](https://sepolia.arbiscan.io/address/0x126409a7DD1CF34004E1A1BFd416eb666Cd0351F#code) |
+| **CreditLine** (USDG) | `0x08856a37d3F7F53e1bc4810e27eF7155255FcA11` | [view verified code](https://sepolia.arbiscan.io/address/0x08856a37d3F7F53e1bc4810e27eF7155255FcA11#code) |
 
 > `PaymentRouter`, `PuntosPaymaster`, `InvoiceEscrow`, `GroupOrders` and `CreditLine` are the
-> USDG versions, deployed on 2026-10-04 from block `315544209` with
+> USDG versions, deployed on 2026-10-04 from block `315555074` with
 > `script/deploy-usdg-stack.sh` (see "Deploying the USDG stack"). The other contracts were reused
 > and rewired: `FiadoScoring` points to the new router and escrow, `PuntosToken`'s minter is the
-> new router, and `RewardsCatalog` reads the new bodega registry. The pre-USDG (testnet-ETH)
-> deployments — router `0xdb1f…191F`, paymaster `0xa00d…6403`, escrow `0x9903…7a4`, group orders
-> `0xfA47…2EB0`, credit line `0x7135…4F29` — are retired; none of them holds funds.
+> new router, and `RewardsCatalog` reads the new bodega registry. Retired deployments, none of
+> which holds funds: the pre-USDG (testnet-ETH) set — router `0xdb1f…191F`, paymaster
+> `0xa00d…6403`, escrow `0x9903…7a4`, group orders `0xfA47…2EB0`, credit line `0x7135…4F29` — and
+> a first USDG set from earlier the same day (router `0xe25E…7329`, paymaster `0x8578…c87F`,
+> escrow `0xAEF2…3F72`, group orders `0x20Ec…60DF`, credit line `0x1264…351F`), replaced after the
+> end-to-end test found the two issues described in "Issues found in the end-to-end test".
 
 Every contract that needs to know who is a registered bodega (`InvoiceEscrow`,
 `RewardsCatalog`, `GroupOrders`, `CreditLine`, `BeneficioToken`, `PuntosPaymaster`) references
@@ -698,15 +701,19 @@ understand "gas":
   becomes a real discount on a bodega's sale — 3% stays well below any traditional card-terminal
   fee (2.5%–3.5%) even in that scenario.
 
-**The numbers behind why cashback covers gas.** With 1 PUNTO = 1 USD, the default 2% cashback on
-the project's typical tickets (S/5–S/20, about US$1.5–6) is worth roughly US$0.03–0.12 in PUNTOS.
-A sponsored UserOperation costs on the order of 200k gas; at Arbitrum Sepolia's current gas price
-(~0.05 gwei) and ETH ≈ US$2,500 that's about US$0.025 — so one purchase's cashback covers roughly
-1× to 4.5× the gas of the next transaction, before even counting the free runway. (These are
-order-of-magnitude figures with the stated assumptions; mainnet gas prices on Arbitrum One are
-typically lower.)
+**Measured cost of gas vs. cashback (2026-10-04, live on Arbitrum Sepolia).** A real
+approve + `receivePayment` UserOperation used 387,797 gas at ~0.052 gwei: **US$ 0.054**
+(`PuntosPaymaster` charged 0.0487 PUNTOS for it — slightly under the real cost, because the
+EntryPoint's `actualGasCost` passed to `postOp` doesn't include `postOp`'s own gas). The default 2%
+cashback on a S/5 purchase is only ~US$ 0.03, on S/20 ~US$ 0.12 — so **small purchases don't pay
+for the next transaction's gas**. On top of that, validation requires a PUNTOS balance and allowance
+covering the operation's *maximum* cost (~US$ 0.10 at these limits, more during the bundler's
+estimation), so a buyer with less than that can't send a paid transaction at all. An earlier
+version of this section estimated 200k gas per operation and concluded the opposite; the live
+measurement replaces it. This is why the paymaster now charges best-effort instead of gating —
+see "Issues found in the end-to-end test".
 
-Covered by the Solidity suite (139 tests, including `test_ChargesPuntosOnceFreeTransactionsAreUsed`
+Covered by the Solidity suite (143 tests, including `test_ChargesPuntosOnceFreeTransactionsAreUsed`
 and the `puntosPerEth` conversion tests). Tested live end-to-end on Arbitrum Sepolia (pre-USDG)
 with two real smart accounts (a bodega and a buyer): the bodega takes several actions without its
 PUNTOS balance ever being touched; the buyer uses up its 5 free transactions and only on the sixth
@@ -883,8 +890,9 @@ ETH: `PaymentRouter` (payments and `payFiado`), `InvoiceEscrow` (collateral and 
   converts gas using `puntosPerEth` (the ETH/USD price with 18 decimals). The owner maintains it
   with `setPuntosPerEth`, bounded to `[100, 100,000]` USD/ETH. It isn't a live oracle read because
   ERC-7562 doesn't allow a paymaster's validation to read other contracts' storage, and on
-  Arbitrum gas costs fractions of a cent: a rate that's a few percent stale doesn't matter. An
-  account is never charged more than the PUNTOS allowance it granted.
+  Arbitrum gas costs fractions of a cent: a rate that's a few percent stale doesn't matter. The
+  charge is best-effort — never more than the account's PUNTOS balance or allowance, and never a
+  reason to reject the operation; the platform covers any shortfall.
 - **Frontend.** Every payment goes as `approve(exact amount)` + the call in a single UserOperation
   (`lib/stablecoin.ts::withStablecoinApproval`): one signature and no open allowance. The UI shows
   everything in soles using the USD→PEN rate (`lib/exchangeRate.ts`, no longer depending on
@@ -907,6 +915,27 @@ rewires it (`setPaymentRouter`, `setEscrow`). Consequence: the previous payment 
 ETH-wei, small amounts) coexists with the new one (in USD-wei) until each bodega accumulates 12
 new payments and the ring buffer replaces it. Until then, those bodegas' heuristic limit comes out
 lower than their USDG history would justify.
+
+## Issues found in the end-to-end test (2026-10-04) — fixed and redeployed
+
+A live end-to-end run (real smart accounts through Pimlico and the paymaster, production API
+routes, the deployed contracts) found two contract issues; both are fixed in the current
+deployment.
+
+- **`registerSelf` minted the bootstrap PUNTOS on every call.** An already-registered bodega could
+  call it in a loop — with gas sponsored by the paymaster, since bodegas always are — minting free
+  PUNTOS and draining the paymaster's deposit. `registerSelf`/`registerBodega` now revert with
+  `AlreadyRegistered` (tests: `test_RevertWhen_RegisterSelfTwice_NoRepeatedBootstrapMint`,
+  `test_RevertWhen_OwnerRegistersExistingBodega`).
+- **Gas in PUNTOS stranded buyers with small purchases.** Validation demanded a PUNTOS balance and
+  allowance covering the operation's maximum cost, while a S/5 purchase's cashback (~US$ 0.03)
+  doesn't even cover the next operation's real gas (~US$ 0.05). `PuntosPaymaster` now never gates
+  on PUNTOS: after the free runway, `postOp` charges `min(cost, balance, allowance)` and the platform
+  covers the rest, emitted as `GasShortfallSponsored` so that cost can be measured. It also adds
+  `POST_OP_OVERHEAD_GAS` (40k, measured) so the charge includes `postOp`'s own gas, which the
+  EntryPoint's `actualGasCost` leaves out (tests: `test_AfterFreeRunOut_ValidationNeverGatesOnPuntos`,
+  `test_NoPuntos_PlatformCoversWholeCost`, `test_ChargeCappedByAllowance`,
+  `test_ChargeCappedByBalance`, `testFuzz_ChargeNeverExceedsBalanceOrAllowance`).
 
 ## Deliberate hackathon shortcuts
 

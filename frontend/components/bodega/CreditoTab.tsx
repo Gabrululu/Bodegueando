@@ -91,7 +91,11 @@ export function CreditoTab({ address, client }: TabProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bodegaAddress: address }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (data.reason === "onchain_rejected") {
+        setAiError("La IA propuso un límite mayor al que permite tu historial, así que no se aplicó. Sigue cobrando y vuelve a intentarlo más adelante.");
+        return;
+      }
       if (!res.ok) throw new Error(data.error ?? "Algo falló al calcular tu fiado");
       setAiResult(data);
       core.refetch();

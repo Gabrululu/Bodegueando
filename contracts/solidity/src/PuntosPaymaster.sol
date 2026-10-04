@@ -29,22 +29,29 @@ interface IBodegaRegistry {
 ///    and matches the project's core promise ("Modelo de negocio" in the README): a bodega
 ///    never pays anything for its own basic activity, full stop, no PUNTOS balance to manage
 ///    or run out of.
-/// 2. It hasn't used up its first FREE_TRANSACTIONS sponsored UserOperations yet. With real
-///    purchase sizes, the cashback from one payment already covers the gas of the next one
-///    with comfortable margin (see ARCHITECTURE.md) — this multi-transaction runway exists
+/// 2. It hasn't used up its first FREE_TRANSACTIONS sponsored UserOperations yet — a runway
 ///    for the cold-start case where an account's first few actions aren't purchases (paying
-///    back fiado, redeeming a reward — neither mints cashback), so nobody hits a gas wall in
-///    their first few steps, same as a normal payment app where "network fee" is never
-///    something the user has to think about.
+///    back fiado, redeeming a reward — neither mints cashback).
 ///
-/// After that, gas is pulled directly in PUNTOS. PaymentRouter mints PUNTOS in USD-wei
+/// After that, gas is charged in PUNTOS **best-effort, never as a gate**: validation always
+/// accepts the operation, and `postOp` charges `min(gas cost in PUNTOS, balance, allowance)`;
+/// the platform covers any shortfall (emitted as `GasShortfallSponsored`, so that cost is
+/// measurable). Measured live on Arbitrum Sepolia, a payment costs ~US$ 0.05 of gas while the 2%
+/// cashback of a S/5 purchase is ~US$ 0.03 — demanding the operation's *maximum* cost up front
+/// (the previous design) stranded buyers with small purchases behind a balance wall, which breaks
+/// the product's promise that paying never involves thinking about a "network fee". This matches
+/// the business model (README, "Modelo de negocio"): operating gas is a platform cost; PUNTOS
+/// offset it when the buyer has them.
+///
+/// PaymentRouter mints PUNTOS in USD-wei
 /// (1e18 PUNTOS = 1 USD of cashback, from USDG payments), while gas is paid in ETH, so the
 /// charge is converted at `puntosPerEth` — an owner-maintained ETH/USD rate, bounded to
 /// [MIN_PUNTOS_PER_ETH, MAX_PUNTOS_PER_ETH] so a bad update can't make gas absurdly cheap or
 /// expensive. It's an owner-set value on purpose, not a live oracle read: ERC-4337 bans a
 /// paymaster's validation from reading storage of unrelated contracts (ERC-7562), and gas
 /// costs are fractions of a cent on Arbitrum, so a rate a few percent stale is immaterial.
-/// Whatever the rate, an account is never charged more than the PUNTOS allowance it granted.
+/// Whatever the rate, an account is never charged more than the PUNTOS allowance it granted, nor
+/// more than its balance.
 ///
 /// The contract itself must hold real ETH (deposited into the EntryPoint via the inherited
 /// `deposit()`/`addStake()` from BasePaymaster) to actually pay the bundler/network — PUNTOS
@@ -80,14 +87,19 @@ contract PuntosPaymaster is BasePaymaster {
     uint256 public constant MIN_PUNTOS_PER_ETH = 100 ether;
     uint256 public constant MAX_PUNTOS_PER_ETH = 100_000 ether;
 
+    /// @notice Gas `postOp` itself spends, which the EntryPoint can't include in the
+    /// `actualGasCost` it passes in. Measured on Arbitrum Sepolia (a charged payment came out
+    /// ~40k gas short of its real cost); added so the charge reflects what the operation cost.
+    uint256 public constant POST_OP_OVERHEAD_GAS = 40_000;
+
     /// @notice How many of its free transactions an account has already used (successfully).
     mapping(address => uint256) public freeTransactionsUsed;
 
-    error InsufficientPuntosAllowance();
-    error InsufficientPuntosBalance();
     error PuntosPerEthOutOfBounds();
 
     event GasChargedInPuntos(address indexed account, uint256 amount);
+    /// @notice Part of an operation's gas the account couldn't cover in PUNTOS — the platform's cost.
+    event GasShortfallSponsored(address indexed account, uint256 shortfallPuntos);
     event FreeTransactionUsed(address indexed account, uint256 remaining);
     event GasSponsoredForBodega(address indexed bodega);
     event PuntosSwept(address indexed to, uint256 amount);
@@ -112,7 +124,7 @@ contract PuntosPaymaster is BasePaymaster {
         return (gasCostWei * puntosPerEth) / 1 ether;
     }
 
-    function _validatePaymasterUserOp(PackedUserOperation calldata userOp, bytes32, uint256 maxCost)
+    function _validatePaymasterUserOp(PackedUserOperation calldata userOp, bytes32, uint256)
         internal
         view
         override
@@ -128,14 +140,14 @@ contract PuntosPaymaster is BasePaymaster {
             return (abi.encode(account, ChargeMode.FreeTransaction), 0);
         }
 
-        uint256 maxCharge = gasCostInPuntos(maxCost);
-        if (puntosToken.allowance(account, address(this)) < maxCharge) revert InsufficientPuntosAllowance();
-        if (puntosToken.balanceOf(account) < maxCharge) revert InsufficientPuntosBalance();
-
+        // No balance/allowance gate here — see the contract doc: postOp charges what it can.
         return (abi.encode(account, ChargeMode.Chargeable), 0);
     }
 
-    function _postOp(PostOpMode mode, bytes calldata context, uint256 actualGasCost, uint256) internal override {
+    function _postOp(PostOpMode mode, bytes calldata context, uint256 actualGasCost, uint256 actualUserOpFeePerGas)
+        internal
+        override
+    {
         (address account, ChargeMode chargeMode) = abi.decode(context, (address, ChargeMode));
 
         if (chargeMode == ChargeMode.SponsoredBodega) {
@@ -158,20 +170,19 @@ contract PuntosPaymaster is BasePaymaster {
             return;
         }
 
-        // Best-effort: if the account's PUNTOS balance/allowance dropped between validation
-        // and here (shouldn't happen within one atomic UserOp, but never trust two reads
-        // across a state-changing call), cap the charge instead of reverting — the paymaster
-        // already paid the real gas either way, and reverting postOp is far more disruptive.
+        // Charge what the account can pay — capped by its balance and allowance, never a revert:
+        // the paymaster already paid the real gas, and the platform covers the rest.
         uint256 available = puntosToken.allowance(account, address(this));
         uint256 balance = puntosToken.balanceOf(account);
         if (balance < available) available = balance;
-        uint256 owed = gasCostInPuntos(actualGasCost);
+        uint256 owed = gasCostInPuntos(actualGasCost + POST_OP_OVERHEAD_GAS * actualUserOpFeePerGas);
         uint256 charge = owed > available ? available : owed;
 
         if (charge > 0) {
             puntosToken.safeTransferFrom(account, address(this), charge);
             emit GasChargedInPuntos(account, charge);
         }
+        if (owed > charge) emit GasShortfallSponsored(account, owed - charge);
     }
 
     /// @notice Owner can sweep PUNTOS collected as gas payment (e.g. to burn them or route

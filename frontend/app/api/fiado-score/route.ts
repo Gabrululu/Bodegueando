@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { createPublicClient, createWalletClient, http, isAddress, type Address } from "viem";
+import { BaseError, ContractFunctionRevertedError, createPublicClient, createWalletClient, http, isAddress, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arbitrumSepolia } from "viem/chains";
 import { fiadoScoringAbi, fiadoScoringAddress } from "@/lib/contracts";
@@ -102,43 +102,85 @@ export async function POST(request: NextRequest) {
 
   const anthropic = new Anthropic();
 
-  const response = await anthropic.messages.create({
-    model: "claude-opus-5",
-    max_tokens: 1024,
-    output_config: { format: { type: "json_schema", schema: recommendationSchema } },
-    system:
-      "You are a credit-risk analyst for Bodegueando, a platform giving Lima corner stores " +
-      "(bodegas) short-term 'fiado' (store credit) to their customers. You analyze a bodega's " +
-      "on-chain payment history — amounts and timestamps of past payments received through the " +
-      "platform — and recommend a credit score and a fiado credit limit. All amounts (payments and " +
-      "limits) are US dollars with 18 decimals, i.e. 10^18 = 1 USD (payments settle in the USDG " +
-      "stablecoin). Favor consistent, " +
-      "frequent, recent payment activity; penalize sparse or old activity. Be conservative with " +
-      "credit limits when history is short. IMPORTANT: the `rationale` field is shown directly " +
-      "to end users who are not technical and may not be fluent in English — it must always be " +
-      "written in simple, everyday Peruvian Spanish, never in English, and never using " +
-      "blockchain/technical terms. `score` and `creditLimitWei` stay numeric as specified by the " +
-      "schema; only `rationale` is the plain-Spanish explanation.",
-    messages: [
-      {
-        role: "user",
-        content: JSON.stringify({
-          bodega: bodegaAddress,
-          currentOnChainScore: currentScore.toString(),
-          currentOnChainCreditLimitWei: currentLimit.toString(),
-          paymentHistory: history,
-          nowUnix: Math.floor(Date.now() / 1000),
-        }),
-      },
-    ],
-  });
+  // Cada fallo devuelve un JSON con `reason` en vez de un 500 vacío: antes un error de la API,
+  // una respuesta cortada o un revert on-chain eran indistinguibles desde afuera.
+  let response: Anthropic.Message;
+  try {
+    response = await anthropic.messages.create({
+      model: "claude-opus-5",
+      // Thinking está activo por defecto en este modelo y cuenta dentro de max_tokens: con 1024
+      // el JSON podía quedar cortado. 16000 es holgado para una respuesta corta.
+      max_tokens: 16000,
+      output_config: { format: { type: "json_schema", schema: recommendationSchema } },
+      system:
+        "You are a credit-risk analyst for Bodegueando, a platform giving Lima corner stores " +
+        "(bodegas) short-term 'fiado' (store credit) to their customers. You analyze a bodega's " +
+        "on-chain payment history — amounts and timestamps of past payments received through the " +
+        "platform — and recommend a credit score and a fiado credit limit. All amounts (payments and " +
+        "limits) are US dollars with 18 decimals, i.e. 10^18 = 1 USD (payments settle in the USDG " +
+        "stablecoin). Favor consistent, " +
+        "frequent, recent payment activity; penalize sparse or old activity. Be conservative with " +
+        "credit limits when history is short. IMPORTANT: the `rationale` field is shown directly " +
+        "to end users who are not technical and may not be fluent in English — it must always be " +
+        "written in simple, everyday Peruvian Spanish, never in English, and never using " +
+        "blockchain/technical terms. `score` and `creditLimitWei` stay numeric as specified by the " +
+        "schema; only `rationale` is the plain-Spanish explanation. The contract rejects any limit " +
+        "above twice what its own on-chain heuristic justifies, so never recommend more than twice " +
+        "`currentOnChainCreditLimitWei`.",
+      messages: [
+        {
+          role: "user",
+          content: JSON.stringify({
+            bodega: bodegaAddress,
+            currentOnChainScore: currentScore.toString(),
+            currentOnChainCreditLimitWei: currentLimit.toString(),
+            paymentHistory: history,
+            nowUnix: Math.floor(Date.now() / 1000),
+          }),
+        },
+      ],
+    });
+  } catch (err) {
+    if (err instanceof Anthropic.AuthenticationError) {
+      console.error("[fiado-score] Anthropic auth failed — check ANTHROPIC_API_KEY", err.message);
+      return NextResponse.json({ error: "AI provider authentication failed", reason: "ai_auth" }, { status: 502 });
+    }
+    if (err instanceof Anthropic.RateLimitError) {
+      return NextResponse.json({ error: "AI provider rate limited, retry later", reason: "ai_rate_limited" }, { status: 503 });
+    }
+    if (err instanceof Anthropic.APIError) {
+      console.error("[fiado-score] Anthropic API error", err.status, err.message);
+      return NextResponse.json({ error: `AI provider error ${err.status}`, reason: "ai_api_error" }, { status: 502 });
+    }
+    throw err;
+  }
+
+  if (response.stop_reason === "refusal") {
+    return NextResponse.json({ error: "The model declined this request", reason: "ai_refusal" }, { status: 502 });
+  }
+  if (response.stop_reason === "max_tokens") {
+    return NextResponse.json({ error: "The model's answer was cut off", reason: "ai_truncated" }, { status: 502 });
+  }
 
   const textBlock = response.content.find((block) => block.type === "text");
   if (!textBlock || textBlock.type !== "text") {
-    return NextResponse.json({ error: "Model returned no text content" }, { status: 502 });
+    return NextResponse.json({ error: "Model returned no text content", reason: "ai_no_text" }, { status: 502 });
   }
 
-  const recommendation = JSON.parse(textBlock.text) as Recommendation;
+  let recommendation: Recommendation;
+  try {
+    recommendation = JSON.parse(textBlock.text) as Recommendation;
+  } catch {
+    return NextResponse.json({ error: "Model returned invalid JSON", reason: "ai_invalid_json" }, { status: 502 });
+  }
+  if (
+    !Number.isInteger(recommendation.score) ||
+    recommendation.score < 0 ||
+    recommendation.score > 1000 ||
+    !/^\d+$/.test(recommendation.creditLimitWei)
+  ) {
+    return NextResponse.json({ error: "Model returned out-of-range values", reason: "ai_invalid_values" }, { status: 502 });
+  }
 
   const oraclePrivateKey = process.env.ORACLE_PRIVATE_KEY;
   if (!oraclePrivateKey) {
@@ -148,12 +190,31 @@ export async function POST(request: NextRequest) {
   const account = privateKeyToAccount(oraclePrivateKey as `0x${string}`);
   const walletClient = createWalletClient({ account, chain: arbitrumSepolia, transport: http(rpcUrl) });
 
-  const txHash = await walletClient.writeContract({
+  const write = {
     address: fiadoScoringAddress,
     abi: fiadoScoringAbi,
     functionName: "updateScoreFromAi",
     args: [bodegaAddress as Address, BigInt(recommendation.score), BigInt(recommendation.creditLimitWei)],
-  });
+  } as const;
 
+  // Simular primero: si el circuit breaker de FiadoScoring rechaza el límite (más del doble de
+  // lo que justifica el historial real), se explica en vez de reventar con un 500.
+  try {
+    await publicClient.simulateContract({ ...write, account });
+  } catch (err) {
+    const revert = err instanceof BaseError ? err.walk((e) => e instanceof ContractFunctionRevertedError) : null;
+    console.error("[fiado-score] updateScoreFromAi would revert", revert ?? err);
+    return NextResponse.json(
+      {
+        recommendation,
+        txHash: null,
+        reason: "onchain_rejected",
+        error: "El contrato no aceptó este límite (supera lo que justifica tu historial). No se aplicó.",
+      },
+      { status: 422 },
+    );
+  }
+
+  const txHash = await walletClient.writeContract(write);
   return NextResponse.json({ recommendation, txHash });
 }

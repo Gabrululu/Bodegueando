@@ -111,10 +111,9 @@ contract PuntosPaymasterTest is Test {
         for (uint256 i = 0; i < paymaster.FREE_TRANSACTIONS(); i++) {
             _sponsoredRoundTrip(bodega, 1 ether, 0.001 ether, IPaymaster.PostOpMode.opSucceeded);
         }
-        PackedUserOperation memory oldBodegaOp = _emptyUserOp(bodega);
-        vm.prank(address(entryPoint));
-        vm.expectRevert(PuntosPaymaster.InsufficientPuntosAllowance.selector);
-        paymaster.validatePaymasterUserOp(oldBodegaOp, bytes32(0), 1 ether);
+        // Charged path now: no longer counts as a free transaction.
+        _sponsoredRoundTrip(bodega, 1 ether, 0.001 ether, IPaymaster.PostOpMode.opSucceeded);
+        assertEq(paymaster.freeTransactionsUsed(bodega), paymaster.FREE_TRANSACTIONS());
     }
 
     function test_OnlyOwnerCanSetBodegaRegistry() public {
@@ -135,23 +134,44 @@ contract PuntosPaymasterTest is Test {
         assertEq(puntos.balanceOf(account), 0, "free transactions must not charge PUNTOS");
     }
 
-    function test_TransactionAfterFreeRunOut_RevertsWithoutAllowance() public {
-        uint256 free = paymaster.FREE_TRANSACTIONS();
-        for (uint256 i = 0; i < free; i++) {
+    function _useFreeRunway() internal {
+        for (uint256 i = 0; i < paymaster.FREE_TRANSACTIONS(); i++) {
             _sponsoredRoundTrip(account, 1 ether, 0.001 ether, IPaymaster.PostOpMode.opSucceeded);
         }
+    }
+
+    /// owed = (actualGasCost + POST_OP_OVERHEAD_GAS × fee) × $2500 — the test's postOp fee is 1 gwei.
+    function _owed(uint256 actualGasCost) internal view returns (uint256) {
+        return paymaster.gasCostInPuntos(actualGasCost + paymaster.POST_OP_OVERHEAD_GAS() * 1 gwei);
+    }
+
+    function test_AfterFreeRunOut_ValidationNeverGatesOnPuntos() public {
+        _useFreeRunway();
+
+        // No PUNTOS and no allowance at all: still accepted — paying never hits a gas wall.
+        PackedUserOperation memory userOp = _emptyUserOp(account);
+        vm.prank(address(entryPoint));
+        (, uint256 validationData) = paymaster.validatePaymasterUserOp(userOp, bytes32(0), 1 ether);
+        assertEq(validationData, 0);
+    }
+
+    function test_NoPuntos_PlatformCoversWholeCost() public {
+        _useFreeRunway();
 
         PackedUserOperation memory userOp = _emptyUserOp(account);
         vm.prank(address(entryPoint));
-        vm.expectRevert(PuntosPaymaster.InsufficientPuntosAllowance.selector);
-        paymaster.validatePaymasterUserOp(userOp, bytes32(0), 1 ether);
+        (bytes memory context,) = paymaster.validatePaymasterUserOp(userOp, bytes32(0), 1 ether);
+
+        vm.expectEmit(true, false, false, true);
+        emit PuntosPaymaster.GasShortfallSponsored(account, _owed(0.0003 ether));
+        vm.prank(address(entryPoint));
+        paymaster.postOp(IPaymaster.PostOpMode.opSucceeded, context, 0.0003 ether, 1 gwei);
+
+        assertEq(puntos.balanceOf(address(paymaster)), 0);
     }
 
     function test_ChargesPuntosOnceFreeTransactionsAreUsed() public {
-        uint256 free = paymaster.FREE_TRANSACTIONS();
-        for (uint256 i = 0; i < free; i++) {
-            _sponsoredRoundTrip(account, 1 ether, 0.001 ether, IPaymaster.PostOpMode.opSucceeded);
-        }
+        _useFreeRunway();
 
         vm.prank(owner);
         puntos.mint(account, 10 ether);
@@ -165,32 +185,71 @@ contract PuntosPaymasterTest is Test {
         vm.prank(address(entryPoint));
         paymaster.postOp(IPaymaster.PostOpMode.opSucceeded, context, 0.0003 ether, 1 gwei);
 
-        // 0.0003 ETH of gas at $2500/ETH = 0.75 USD = 0.75 PUNTOS.
-        assertEq(puntos.balanceOf(account), 10 ether - 0.75 ether);
-        assertEq(puntos.balanceOf(address(paymaster)), 0.75 ether);
+        // (0.0003 ETH + 40k gas × 1 gwei) = 0.00034 ETH at $2500/ETH = 0.85 PUNTOS.
+        assertEq(_owed(0.0003 ether), 0.85 ether);
+        assertEq(puntos.balanceOf(account), 10 ether - 0.85 ether);
+        assertEq(puntos.balanceOf(address(paymaster)), 0.85 ether);
     }
 
-    function test_ValidationRequiresAllowanceForConvertedMaxCost() public {
-        uint256 free = paymaster.FREE_TRANSACTIONS();
-        for (uint256 i = 0; i < free; i++) {
-            _sponsoredRoundTrip(account, 1 ether, 0.001 ether, IPaymaster.PostOpMode.opSucceeded);
-        }
+    function test_ChargeCappedByAllowance() public {
+        _useFreeRunway();
 
         vm.prank(owner);
         puntos.mint(account, 10 ether);
-        // maxCost 0.001 ETH -> 2.5 PUNTOS needed; an allowance sized in raw wei isn't enough.
         vm.prank(account);
-        puntos.approve(address(paymaster), 0.001 ether);
+        puntos.approve(address(paymaster), 0.1 ether);
 
         PackedUserOperation memory userOp = _emptyUserOp(account);
         vm.prank(address(entryPoint));
-        vm.expectRevert(PuntosPaymaster.InsufficientPuntosAllowance.selector);
-        paymaster.validatePaymasterUserOp(userOp, bytes32(0), 0.001 ether);
+        (bytes memory context,) = paymaster.validatePaymasterUserOp(userOp, bytes32(0), 0.001 ether);
 
-        vm.prank(account);
-        puntos.approve(address(paymaster), 2.5 ether);
+        vm.expectEmit(true, false, false, true);
+        emit PuntosPaymaster.GasShortfallSponsored(account, _owed(0.0003 ether) - 0.1 ether);
         vm.prank(address(entryPoint));
-        paymaster.validatePaymasterUserOp(userOp, bytes32(0), 0.001 ether);
+        paymaster.postOp(IPaymaster.PostOpMode.opSucceeded, context, 0.0003 ether, 1 gwei);
+
+        assertEq(puntos.balanceOf(address(paymaster)), 0.1 ether, "never more than the allowance");
+    }
+
+    function test_ChargeCappedByBalance() public {
+        _useFreeRunway();
+
+        vm.prank(owner);
+        puntos.mint(account, 0.2 ether);
+        vm.prank(account);
+        puntos.approve(address(paymaster), type(uint256).max);
+
+        PackedUserOperation memory userOp = _emptyUserOp(account);
+        vm.prank(address(entryPoint));
+        (bytes memory context,) = paymaster.validatePaymasterUserOp(userOp, bytes32(0), 0.001 ether);
+        vm.prank(address(entryPoint));
+        paymaster.postOp(IPaymaster.PostOpMode.opSucceeded, context, 0.0003 ether, 1 gwei);
+
+        assertEq(puntos.balanceOf(account), 0, "charges everything it has, no revert");
+        assertEq(puntos.balanceOf(address(paymaster)), 0.2 ether);
+    }
+
+    function testFuzz_ChargeNeverExceedsBalanceOrAllowance(uint256 balance, uint256 allowance, uint256 gasCost) public {
+        balance = bound(balance, 0, 100 ether);
+        allowance = bound(allowance, 0, 100 ether);
+        gasCost = bound(gasCost, 0, 0.01 ether);
+        _useFreeRunway();
+
+        vm.prank(owner);
+        puntos.mint(account, balance);
+        vm.prank(account);
+        puntos.approve(address(paymaster), allowance);
+
+        PackedUserOperation memory userOp = _emptyUserOp(account);
+        vm.prank(address(entryPoint));
+        (bytes memory context,) = paymaster.validatePaymasterUserOp(userOp, bytes32(0), 1 ether);
+        vm.prank(address(entryPoint));
+        paymaster.postOp(IPaymaster.PostOpMode.opSucceeded, context, gasCost, 1 gwei);
+
+        uint256 charged = puntos.balanceOf(address(paymaster));
+        assertLe(charged, balance);
+        assertLe(charged, allowance);
+        assertLe(charged, _owed(gasCost));
     }
 
     function test_GasCostInPuntos_UsesRate() public view {
@@ -237,21 +296,5 @@ contract PuntosPaymasterTest is Test {
         // The account still has all its free transactions for when it actually succeeds.
         _sponsoredRoundTrip(account, 1 ether, 0.001 ether, IPaymaster.PostOpMode.opSucceeded);
         assertEq(paymaster.freeTransactionsUsed(account), 1);
-    }
-
-    function test_RevertWhen_InsufficientPuntosBalance() public {
-        uint256 free = paymaster.FREE_TRANSACTIONS();
-        for (uint256 i = 0; i < free; i++) {
-            _sponsoredRoundTrip(account, 1 ether, 0.001 ether, IPaymaster.PostOpMode.opSucceeded);
-        }
-
-        // Approved, but never minted any PUNTOS.
-        vm.prank(account);
-        puntos.approve(address(paymaster), type(uint256).max);
-
-        PackedUserOperation memory userOp = _emptyUserOp(account);
-        vm.prank(address(entryPoint));
-        vm.expectRevert(PuntosPaymaster.InsufficientPuntosBalance.selector);
-        paymaster.validatePaymasterUserOp(userOp, bytes32(0), 0.0005 ether);
     }
 }

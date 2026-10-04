@@ -40,6 +40,7 @@ contract PaymentRouter is Ownable, StablecoinSettlement {
     error ZeroAmount();
     error UnknownBodega();
     error CashbackTooHigh();
+    error AlreadyRegistered();
 
     event BodegaRegistered(address indexed bodega);
     event PaymentReceived(address indexed payer, address indexed bodega, uint256 amount, uint256 cashback);
@@ -56,6 +57,7 @@ contract PaymentRouter is Ownable, StablecoinSettlement {
     }
 
     function registerBodega(address bodega) external onlyOwner {
+        if (isBodega[bodega]) revert AlreadyRegistered();
         isBodega[bodega] = true;
         emit BodegaRegistered(bodega);
         puntosToken.mint(bodega, BODEGA_BOOTSTRAP_PUNTOS);
@@ -67,7 +69,11 @@ contract PaymentRouter is Ownable, StablecoinSettlement {
     /// rights and doesn't affect FiadoScoring's own msg.sender-gated fiado toggle. Mints
     /// BODEGA_BOOTSTRAP_PUNTOS to the caller so they can actually operate afterward (toggle
     /// fiado, extend fiado to customers) — see the constant's doc for why this is needed.
+    /// Reverts if the caller is already a bodega: otherwise registering again and again would
+    /// mint the bootstrap PUNTOS every time, with the gas sponsored by PuntosPaymaster (bodegas
+    /// are always sponsored) — free PUNTOS for anyone, paid for out of the paymaster's deposit.
     function registerSelf() external {
+        if (isBodega[msg.sender]) revert AlreadyRegistered();
         isBodega[msg.sender] = true;
         emit BodegaRegistered(msg.sender);
         puntosToken.mint(msg.sender, BODEGA_BOOTSTRAP_PUNTOS);

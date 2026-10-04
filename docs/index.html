@@ -513,7 +513,7 @@
       <div class="card">
         <div class="name">PaymentRouter</div>
         <div class="desc" data-i18n="c.router">Takes every payment in USDG straight to the bodega, mints cashback, records the history and onboards bodegas self-service.</div>
-        <div class="addr"><span>0xe25E…7329</span><a href="https://sepolia.arbiscan.io/address/0xe25Ee43a2A7Ba1F582603E47DE1717E36EF57329#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
+        <div class="addr"><span>0x3E77…655b</span><a href="https://sepolia.arbiscan.io/address/0x3E774Bb89AD93aAEE1ddd3d6cEeE609B712b655b#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
@@ -530,14 +530,14 @@
 
       <div class="card">
         <div class="name">PuntosPaymaster</div>
-        <div class="desc" data-i18n="c.paymaster">ERC-4337 paymaster: always sponsors bodegas and each buyer's first 5 transactions, then charges gas in PUNTOS.</div>
-        <div class="addr"><span>0x8578…c87F</span><a href="https://sepolia.arbiscan.io/address/0x857836be11e433559cBea32120324B232Dddc87F#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
+        <div class="desc" data-i18n="c.paymaster">ERC-4337 paymaster: always sponsors bodegas and each buyer's first 5 transactions; after that it charges gas in PUNTOS when the buyer has them and never blocks a payment.</div>
+        <div class="addr"><span>0x493D…5B86</span><a href="https://sepolia.arbiscan.io/address/0x493D8B20f12E94cf513b9F078E41FFDF1E685B86#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
         <div class="name">InvoiceEscrow</div>
         <div class="desc" data-i18n="c.escrow">Store credit with partial collateral — an extra path for amounts where the bodega prefers to ask for a deposit.</div>
-        <div class="addr"><span>0xAEF2…3F72</span><a href="https://sepolia.arbiscan.io/address/0xAEF227E192B2EFbb85D8CAD5C6E5dd3c38513F72#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
+        <div class="addr"><span>0xa6CC…0c96</span><a href="https://sepolia.arbiscan.io/address/0xa6CCbB44F50a8a494C621B1b5aE922ABef1A0c96#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
@@ -549,7 +549,7 @@
       <div class="card">
         <div class="name">GroupOrders</div>
         <div class="desc" data-i18n="c.group">Joint purchases between nearby bodegas to reach a distributor's minimum order.</div>
-        <div class="addr"><span>0x20Ec…60DF</span><a href="https://sepolia.arbiscan.io/address/0x20Ec045bdc3C1a371b0a5B94d136c1d58C0160DF#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
+        <div class="addr"><span>0x5223…9E5F</span><a href="https://sepolia.arbiscan.io/address/0x5223dA615bB75E766841B01b949F5e5bB8869E5F#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
@@ -567,7 +567,7 @@
       <div class="card">
         <div class="name">CreditLine</div>
         <div class="desc" data-i18n="c.credit">On-chain credit line that consumes the ZK certificate — the better the proven score, the less collateral.</div>
-        <div class="addr"><span>0x1264…351F</span><a href="https://sepolia.arbiscan.io/address/0x126409a7DD1CF34004E1A1BFd416eb666Cd0351F#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
+        <div class="addr"><span>0x0885…cA11</span><a href="https://sepolia.arbiscan.io/address/0x08856a37d3F7F53e1bc4810e27eF7155255FcA11#code" target="_blank" rel="noopener" data-i18n="c.view">view ↗</a></div>
       </div>
 
       <div class="card">
@@ -694,7 +694,7 @@
     "c.router": "Recibe cada pago en USDG directo a la bodega, acuña cashback, registra el historial y da de alta bodegas self-service.",
     "c.fiado": "Score y límite de fiado heurístico en Rust/WASM — el único contrato que no es Solidity, por el costo del cómputo repetido en cada pago.",
     "c.puntos": "ERC-20 de cashback (1 PUNTO = 1 USD de cashback), libre y transferible — se gana pagando, se gasta en gas o en el catálogo de beneficios.",
-    "c.paymaster": "Paymaster ERC-4337: patrocina siempre a las bodegas y las primeras 5 transacciones de cada comprador; después cobra el gas en PUNTOS.",
+    "c.paymaster": "Paymaster ERC-4337: patrocina siempre a las bodegas y las primeras 5 transacciones de cada comprador; después cobra el gas en PUNTOS si el comprador los tiene, y nunca bloquea un pago.",
     "c.escrow": "Fiado con garantía parcial — vía adicional para montos donde la bodega prefiere pedir un depósito.",
     "c.rewards": "Catálogo de beneficios por bodega, pagado en PUNTOS y canjeable en cualquier bodega de la red.",
     "c.group": "Compras conjuntas entre bodegas cercanas para alcanzar el pedido mínimo de un distribuidor.",
