@@ -114,6 +114,33 @@ export async function getValue(key: string): Promise<string | null> {
   });
 }
 
+/** Escribe `key` (sobrescribe si existía). */
+export async function setValue(key: string, value: string): Promise<void> {
+  if (redis) {
+    await redis.set(key, value);
+    return;
+  }
+  await withFileMutex(() => {
+    const data = readKvFile();
+    data[key] = value;
+    writeKvFile(data);
+  });
+}
+
+/**
+ * Lee varias claves en una sola ida (MGET en Redis). Ojo: el cliente REST de Upstash
+ * deserializa solo los valores que son JSON válido, así que quien guarde JSON debe aceptar
+ * tanto el string como el objeto ya parseado.
+ */
+export async function getValues(keys: string[]): Promise<Array<unknown | null>> {
+  if (keys.length === 0) return [];
+  if (redis) return redis.mget<unknown[]>(...keys);
+  return withFileMutex(() => {
+    const data = readKvFile();
+    return keys.map((k) => data[k] ?? null);
+  });
+}
+
 export async function deleteKey(key: string): Promise<void> {
   if (redis) {
     await redis.del(key);

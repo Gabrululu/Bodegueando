@@ -13,6 +13,7 @@ import {
   useNowSeconds,
   useTelegramLinked,
 } from "@/lib/bodega/hooks";
+import { useBodegaProfile } from "@/lib/bodega/profile";
 import { cardClass, highlightBoxClass, mutedTextClass, relativeDays, sectionTitleClass } from "@/lib/bodega/ui";
 import { useExchangeRate } from "@/lib/useExchangeRate";
 import { SalesChart } from "./SalesChart";
@@ -35,6 +36,7 @@ export function InicioTab({ address, navigate }: TabProps) {
   const { orders } = useGroupOrders(address, locations.savedLocation, locations.locationsByAddress);
   const telegram = useTelegramLinked(address);
   const bodegaCode = useBodegaCode(address);
+  const profile = useBodegaProfile(address);
   const { formatSolesFromUsd, formatStablecoin, usdPen } = useExchangeRate();
   const confianza = confianzaLabel(core.score);
 
@@ -79,12 +81,13 @@ export function InicioTab({ address, navigate }: TabProps) {
 
   const steps = [
     { done: Boolean(bodegaCode), text: "Registrar tu bodega", tab: "cobrar" as const, anchor: "qr" },
+    { done: Boolean(profile.data?.name), text: "Ponerle nombre (y logo) a tu bodega", tab: "perfil" as const, anchor: "" },
     { done: (sales.data?.length ?? 0) > 0, text: "Mostrar tu QR y cobrar tu primera venta", tab: "cobrar" as const, anchor: "qr" },
     { done: locations.savedLocation !== null, text: "Guardar tu ubicación en el mapa", tab: "red" as const, anchor: "ubicacion" },
     { done: telegram.linked === true, text: "Vincular Telegram para recibir avisos", tab: "cobrar" as const, anchor: "telegram" },
     { done: core.fiadoEnabled, text: "Activar el fiado para tus clientes", tab: "fiado" as const, anchor: "fiado" },
   ];
-  const stepsLoaded = locations.isLoaded && telegram.linked !== null && !sales.isLoading && !core.fiadoEnabledLoading;
+  const stepsLoaded = profile.isFetched && locations.isLoaded && telegram.linked !== null && !sales.isLoading && !core.fiadoEnabledLoading;
   const doneCount = steps.filter((s) => s.done).length;
 
   const kpiValue = (value: string) => (sales.isLoading ? "…" : value);

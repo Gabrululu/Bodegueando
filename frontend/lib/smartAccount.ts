@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useWallets } from "@privy-io/react-auth";
-import { createPublicClient, http, type Abi, type Address } from "viem";
+import { createPublicClient, http, toHex, type Abi, type Address, type Hex } from "viem";
 import { arbitrumSepolia } from "viem/chains";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { createSmartAccountClient, type SmartAccountClient } from "permissionless";
@@ -64,6 +64,12 @@ export function useSmartAccountClient(): {
   client: SmartAccountClient | null;
   address: Address | null;
   isLoading: boolean;
+  /**
+   * Firma un mensaje con la wallet embebida dueña de la smart account (personal_sign). Las
+   * SimpleAccount no implementan ERC-1271, así que el servidor verifica esta firma contra
+   * `owner()` de la cuenta — ver lib/ownerAuth.ts.
+   */
+  signAsOwner: ((message: string) => Promise<Hex>) | null;
 } {
   const { wallets } = useWallets();
   const embeddedWallet = wallets.find((w) => w.walletClientType === "privy");
@@ -126,7 +132,19 @@ export function useSmartAccountClient(): {
     };
   }, [embeddedWallet]);
 
-  return { client, address, isLoading };
+  const signAsOwner = useCallback(
+    async (message: string): Promise<Hex> => {
+      if (!embeddedWallet) throw new Error("No hay sesión iniciada");
+      const provider = await embeddedWallet.getEthereumProvider();
+      return (await provider.request({
+        method: "personal_sign",
+        params: [toHex(message), embeddedWallet.address],
+      })) as Hex;
+    },
+    [embeddedWallet],
+  );
+
+  return { client, address, isLoading, signAsOwner: embeddedWallet ? signAsOwner : null };
 }
 
 export interface ContractCall {

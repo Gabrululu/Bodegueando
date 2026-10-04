@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { HandCoins, Home, Landmark, NotebookPen, QrCode, Users } from "lucide-react";
+import { ChevronRight, Home, Landmark, NotebookPen, QrCode, Users } from "lucide-react";
 import { fiadoScoringAddress, paymentRouterAddress, STABLECOIN_DECIMALS } from "@/lib/contracts";
 import { useBodegaCode, useBodegaCore } from "@/lib/bodega/hooks";
+import { useBodegaProfile } from "@/lib/bodega/profile";
 import type { Address } from "viem";
 import type { SmartAccountClient } from "permissionless";
 import { useSmartAccountClient } from "@/lib/smartAccount";
@@ -11,9 +12,11 @@ import { useExchangeRate } from "@/lib/useExchangeRate";
 import { CobrarTab } from "./CobrarTab";
 import { CreditoTab } from "./CreditoTab";
 import { FiadoTab } from "./FiadoTab";
+import { BodegaAvatar } from "./BodegaAvatar";
 import { InicioTab } from "./InicioTab";
+import { PerfilTab } from "./PerfilTab";
 import { RedTab } from "./RedTab";
-import type { BodegaTab } from "./types";
+import type { BodegaTab, TabProps } from "./types";
 
 const TABS: Array<{ id: BodegaTab; label: string; Icon: typeof Home }> = [
   { id: "inicio", label: "Inicio", Icon: Home },
@@ -24,7 +27,7 @@ const TABS: Array<{ id: BodegaTab; label: string; Icon: typeof Home }> = [
 ];
 
 function isTab(value: string | null): value is BodegaTab {
-  return TABS.some((t) => t.id === value);
+  return value === "perfil" || TABS.some((t) => t.id === value);
 }
 
 const TAB_CHANGE_EVENT = "bodega:tabchange";
@@ -51,7 +54,7 @@ function subscribeToTab(onChange: () => void) {
  * consulta lo que se está viendo.
  */
 export function BodegaDashboard() {
-  const { client, address, isLoading: isAccountLoading } = useSmartAccountClient();
+  const { client, address, isLoading: isAccountLoading, signAsOwner } = useSmartAccountClient();
 
   if (!address) {
     return (
@@ -61,15 +64,24 @@ export function BodegaDashboard() {
     );
   }
 
-  return <BodegaDashboardView address={address} client={client} />;
+  return <BodegaDashboardView address={address} client={client} signAsOwner={signAsOwner} />;
 }
 
 /** El panel en sí, para una cuenta ya conocida (separado de cómo se obtiene la cuenta). */
-export function BodegaDashboardView({ address, client }: { address: Address; client: SmartAccountClient | null }) {
+export function BodegaDashboardView({
+  address,
+  client,
+  signAsOwner = null,
+}: {
+  address: Address;
+  client: SmartAccountClient | null;
+  signAsOwner?: TabProps["signAsOwner"];
+}) {
   const tab = useSyncExternalStore(subscribeToTab, tabFromUrl, () => "inicio" as const);
   const [anchor, setAnchor] = useState<string | null>(null);
   const core = useBodegaCore(address);
   const bodegaCode = useBodegaCode(address);
+  const profile = useBodegaProfile(address);
   const { formatStablecoin } = useExchangeRate();
 
   const navigate = useCallback((next: BodegaTab, nextAnchor?: string) => {
@@ -115,7 +127,7 @@ export function BodegaDashboardView({ address, client }: { address: Address; cli
     );
   }
 
-  const tabProps = { address, client, navigate };
+  const tabProps: TabProps = { address, client, navigate, signAsOwner };
   const usd = Number(core.balance) / 10 ** STABLECOIN_DECIMALS;
 
   return (
@@ -150,15 +162,33 @@ export function BodegaDashboardView({ address, client }: { address: Address; cli
 
       <div className="flex min-w-0 flex-1 flex-col gap-6">
         <header className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-black/10 bg-[#fffffc] px-5 py-4 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#c9e265]" aria-hidden>
-              <HandCoins className="h-5 w-5 text-[#0a0a0b]" />
+          <button
+            type="button"
+            onClick={() => navigate("perfil")}
+            className="group flex min-w-0 cursor-pointer items-center gap-3 rounded-xl text-left"
+            aria-label="Ver y editar el perfil de tu bodega"
+          >
+            <BodegaAvatar address={address} profile={profile.data} />
+            <span className="min-w-0">
+              {profile.data?.name ? (
+                <>
+                  <span className="block truncate text-base font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+                    {profile.data.name}
+                  </span>
+                  <span className="block text-xs text-[#6b6d64]">
+                    Código #{bodegaCode ?? "…"} · <span className="underline-offset-2 group-hover:underline">Editar perfil</span>
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="block text-base font-semibold text-[#0a0a0b]">Bodega #{bodegaCode ?? "…"}</span>
+                  <span className="flex items-center gap-0.5 text-xs font-medium text-[#718817]">
+                    Ponle nombre y logo a tu bodega <ChevronRight aria-hidden className="h-3.5 w-3.5" />
+                  </span>
+                </>
+              )}
             </span>
-            <div>
-              <p className="text-xs text-[#6b6d64]">Tu bodega</p>
-              <p className="text-base font-semibold tracking-wide text-[#0a0a0b]">#{bodegaCode ?? "…"}</p>
-            </div>
-          </div>
+          </button>
           <div className="text-right">
             <p className="text-xs text-[#6b6d64]">Tu saldo</p>
             <p className="text-xl font-semibold text-[#0a0a0b] [font-family:var(--font-bricolage)]">
@@ -173,6 +203,7 @@ export function BodegaDashboardView({ address, client }: { address: Address; cli
         {tab === "fiado" && <FiadoTab {...tabProps} />}
         {tab === "credito" && <CreditoTab {...tabProps} />}
         {tab === "red" && <RedTab {...tabProps} />}
+        {tab === "perfil" && <PerfilTab {...tabProps} />}
       </div>
     </div>
   );

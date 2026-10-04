@@ -88,22 +88,26 @@ export default function AppHome() {
     <div className="flex flex-col flex-1 items-center bg-[#fafaf7] [font-family:var(--font-geist-sans)]">
       <main
         className={`flex w-full flex-col items-center gap-8 px-4 text-center sm:px-6 ${
-          showBodegaPanel ? "max-w-5xl py-8" : "max-w-xl py-16"
+          showBodegaPanel ? "max-w-5xl py-6" : "max-w-xl py-6"
         }`}
       >
-        <div className="space-y-3">
-          <div className="flex items-center justify-center gap-2.5">
-            <img src="/logo-mark.svg" alt="" className="h-9 w-9 shrink-0" />
-            <h1 className="text-3xl font-semibold tracking-tight text-[#0a0a0b] [font-family:var(--font-bricolage)]">
+        {/* Barra superior: marca a la izquierda, cuenta (correo + Salir) a la derecha. */}
+        <header className="flex w-full items-center justify-between gap-3 border-b border-black/10 pb-4">
+          <div className="flex items-center gap-2">
+            <img src="/logo-mark.svg" alt="" className="h-8 w-8 shrink-0" />
+            <span className="text-lg font-semibold tracking-tight text-[#0a0a0b] [font-family:var(--font-bricolage)]">
               Bodegueando
-            </h1>
+            </span>
           </div>
-          <p className="text-[#55564f]">
-            Paga rápido, junta puntos y accede a fiado en tu bodega de barrio.
-          </p>
-        </div>
+          {address && <Login />}
+        </header>
 
-        <Login />
+        {!address && (
+          <div className="space-y-4">
+            <p className="text-[#55564f]">Paga rápido, junta puntos y accede a fiado en tu bodega de barrio.</p>
+            <Login />
+          </div>
+        )}
 
         {showRolePicker && (
           <div className="flex flex-col items-center gap-3">
